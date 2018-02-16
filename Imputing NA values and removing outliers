@@ -1,0 +1,430 @@
+
+Stage 1:
+
+Input data:
+
+Here, data is imported and NAs are removed just to compare how many complete cases observations left.
+
+hmeq_input = read.csv("C:/Users/Prafful/Downloads/hmeq.csv")
+hmeq_input_without_NA = hmeq_input[complete.cases(hmeq_input[,c(2,3,4,7,8,9,10,11,12,13)]),]
+
+Stage 3
+There were only 3515 complete observations left after removing NAs hence we can use MICE package to predict NA values. #Load mice and vim libraries:
+library(mice)
+library(VIM)
+## Loading required package: colorspace
+## Loading required package: grid
+## Loading required package: data.table
+## VIM is ready to use. 
+##  Since version 4.0.0 the GUI is in its own package VIMGUI.
+## 
+##           Please use the package to use the new (and old) GUI.
+## Suggestions and bug-reports can be submitted at: https://github.com/alexkowa/VIM/issues
+## 
+## Attaching package: 'VIM'
+## The following object is masked from 'package:datasets':
+## 
+##     sleep
+View pattern NAs in the hmeq data set using md.pattern() function:
+We can use md.pattern function to analyse number of missing values in each row wrt columns.
+md.pattern(hmeq_input)
+##      BAD LOAN REASON JOB VALUE CLNO CLAGE NINQ YOJ MORTDUE DELINQ DEROG
+## 3515   1    1      1   1     1    1     1    1   1       1      1     1
+##  176   1    1      1   1     1    1     1    1   1       0      1     1
+##   15   1    1      1   1     0    1     1    1   1       1      1     1
+##  184   1    1      1   1     1    1     1    1   0       1      1     1
+##  133   1    1      1   1     1    1     1    1   1       1      1     0
+##   12   1    1      1   1     1    1     1    1   1       1      0     1
+##   28   1    1      1   1     1    1     0    1   1       1      1     1
+##   36   1    1      1   1     1    1     1    0   1       1      1     1
+##  923   1    1      1   1     1    1     1    1   1       1      1     1
+##    4   1    1      1   1     0    1     1    1   1       0      1     1
+##   53   1    1      1   1     1    1     1    1   0       0      1     1
+##    1   1    1      1   1     0    1     1    1   0       1      1     1
+##    2   1    1      1   1     0    1     1    1   1       1      1     0
+##    1   1    1      1   1     0    1     1    1   1       1      0     1
+##   91   1    1      1   1     1    1     1    1   1       1      0     0
+##   19   1    1      1   1     1    1     0    1   1       0      1     1
+##   16   1    1      1   1     1    1     0    1   0       1      1     1
+##    4   1    1      1   1     1    1     1    0   0       1      1     1
+##   25   1    1      1   1     1    1     1    0   1       1      1     0
+##   17   1    1      1   1     1    1     1    0   1       1      0     1
+##   55   1    1      1   1     1    1     1    1   1       0      1     1
+##   54   1    1      1   1     0    1     1    1   1       1      1     1
+##   37   1    1      1   1     1    1     1    1   0       1      1     1
+##   28   1    1      1   1     1    1     1    1   1       1      1     0
+##    6   1    1      1   1     1    1     1    1   1       1      0     1
+##   17   1    1      1   1     1    1     0    1   1       1      1     1
+##    9   1    1      1   1     1    1     1    0   1       1      1     1
+##    6   1    1      1   1     1    1     1    1   0       0      1     0
+##   14   1    1      1   1     1    1     1    1   1       0      0     0
+##    7   1    1      1   1     1    1     1    1   0       1      0     0
+##   12   1    1      1   1     1    1     1    0   1       0      0     1
+##   10   1    1      1   1     1    1     1    0   0       1      0     1
+##   87   1    1      1   1     1    1     1    0   1       1      0     0
+##    6   1    1      1   1     0    1     1    1   1       0      1     1
+##   13   1    1      1   1     1    1     1    1   0       0      1     1
+##    1   1    1      1   1     0    1     1    1   0       1      1     1
+##    3   1    1      1   1     0    1     1    1   1       1      1     0
+##    1   1    1      1   1     1    1     1    1   0       1      1     0
+##    1   1    1      1   1     0    1     1    1   1       1      0     1
+##    1   1    1      1   1     1    1     1    1   0       1      0     1
+##   14   1    1      1   1     1    1     1    1   1       1      0     0
+##    4   1    1      1   1     1    1     0    1   1       0      1     1
+##    1   1    1      1   1     1    1     0    1   0       1      1     1
+##    3   1    1      1   1     1    1     1    0   0       1      1     1
+##    5   1    1      1   1     1    1     1    0   1       1      1     0
+##    2   1    1      1   1     1    1     1    0   1       1      0     1
+##   12   1    1      1   1     1    1     1    0   0       0      0     1
+##    9   1    1      1   1     1    1     1    0   1       0      0     0
+##    1   1    1      1   1     1    1     1    1   0       0      1     0
+##    1   1    1      1   1     1    1     1    1   1       0      0     0
+##    1   1    1      1   1     0    1     1    1   1       1      0     0
+##    1   1    1      1   1     1    1     1    1   0       1      0     0
+##    1   1    1      1   1     0    1     0    1   1       0      1     1
+##    1   1    1      1   1     1    1     1    0   1       0      0     1
+##    1   1    1      1   1     1    1     1    0   0       1      0     1
+##    8   1    1      1   1     1    1     1    0   1       1      0     0
+##   40   1    1      1   1     1    1     1    0   0       0      0     0
+##   62   1    1      1   1     1    0     0    0   1       1      0     0
+##    3   1    1      1   1     0    1     1    1   1       0      0     0
+##    1   1    1      1   1     0    1     1    0   1       0      1     0
+##    1   1    1      1   1     1    1     1    0   0       0      0     1
+##    1   1    1      1   1     1    1     1    0   1       0      0     0
+##    4   1    1      1   1     1    0     0    0   1       0      0     0
+##    2   1    1      1   1     0    0     0    0   1       1      0     0
+##   43   1    1      1   1     1    0     0    0   0       1      0     0
+##    4   1    1      1   1     1    1     1    0   0       0      0     0
+##   22   1    1      1   1     1    0     0    0   1       1      0     0
+##   47   1    1      1   1     1    0     0    0   0       0      0     0
+##    9   1    1      1   1     1    0     0    0   1       0      0     0
+##    4   1    1      1   1     0    0     0    0   1       1      0     0
+##    8   1    1      1   1     1    0     0    0   0       1      0     0
+##    6   1    1      1   1     0    0     0    0   0       0      0     0
+##    2   1    1      1   1     0    0     0    0   1       0      0     0
+##    9   1    1      1   1     1    0     0    0   0       0      0     0
+##    4   1    1      1   1     0    0     0    0   0       0      0     0
+##        0    0      0   0   112  222   308  510 515     518    580   708
+##      DEBTINC     
+## 3515       1    0
+##  176       1    1
+##   15       1    1
+##  184       1    1
+##  133       1    1
+##   12       1    1
+##   28       1    1
+##   36       1    1
+##  923       0    1
+##    4       1    2
+##   53       1    2
+##    1       1    2
+##    2       1    2
+##    1       1    2
+##   91       1    2
+##   19       1    2
+##   16       1    2
+##    4       1    2
+##   25       1    2
+##   17       1    2
+##   55       0    2
+##   54       0    2
+##   37       0    2
+##   28       0    2
+##    6       0    2
+##   17       0    2
+##    9       0    2
+##    6       1    3
+##   14       1    3
+##    7       1    3
+##   12       1    3
+##   10       1    3
+##   87       1    3
+##    6       0    3
+##   13       0    3
+##    1       0    3
+##    3       0    3
+##    1       0    3
+##    1       0    3
+##    1       0    3
+##   14       0    3
+##    4       0    3
+##    1       0    3
+##    3       0    3
+##    5       0    3
+##    2       0    3
+##   12       1    4
+##    9       1    4
+##    1       0    4
+##    1       0    4
+##    1       0    4
+##    1       0    4
+##    1       0    4
+##    1       0    4
+##    1       0    4
+##    8       0    4
+##   40       1    5
+##   62       1    5
+##    3       0    5
+##    1       0    5
+##    1       0    5
+##    1       0    5
+##    4       1    6
+##    2       1    6
+##   43       1    6
+##    4       0    6
+##   22       0    6
+##   47       1    7
+##    9       0    7
+##    4       0    7
+##    8       0    7
+##    6       1    8
+##    2       0    8
+##    9       0    8
+##    4       0    9
+##         1267 4740
+Display distribution of NAs in data:
+hmeq_aggr = aggr(hmeq_input, col=mdc(1:2), numbers=TRUE, sortVars=TRUE, labels=names(hmeq_input), cex.axis=.7, gap=3, ylab=c("Proportion of missing values","Missing values Pattern"))
+## Warning in plot.aggr(res, ...): not enough vertical space to display
+## frequencies (too many combinations)
+ 
+## 
+##  Variables sorted by number of missings: 
+##  Variable      Count
+##   DEBTINC 0.21258389
+##     DEROG 0.11879195
+##    DELINQ 0.09731544
+##   MORTDUE 0.08691275
+##       YOJ 0.08640940
+##      NINQ 0.08557047
+##     CLAGE 0.05167785
+##      CLNO 0.03724832
+##     VALUE 0.01879195
+##       BAD 0.00000000
+##      LOAN 0.00000000
+##    REASON 0.00000000
+##       JOB 0.00000000
+summary(hmeq_aggr)
+## 
+##  Missings per variable: 
+##  Variable Count
+##       BAD     0
+##      LOAN     0
+##   MORTDUE   518
+##     VALUE   112
+##    REASON     0
+##       JOB     0
+##       YOJ   515
+##     DEROG   708
+##    DELINQ   580
+##     CLAGE   308
+##      NINQ   510
+##      CLNO   222
+##   DEBTINC  1267
+## 
+##  Missings in combinations of variables: 
+##               Combinations Count     Percent
+##  0:0:0:0:0:0:0:0:0:0:0:0:0  3515 58.97651007
+##  0:0:0:0:0:0:0:0:0:0:0:0:1   923 15.48657718
+##  0:0:0:0:0:0:0:0:0:0:1:0:0    36  0.60402685
+##  0:0:0:0:0:0:0:0:0:0:1:0:1     9  0.15100671
+##  0:0:0:0:0:0:0:0:0:1:0:0:0    28  0.46979866
+##  0:0:0:0:0:0:0:0:0:1:0:0:1    17  0.28523490
+##  0:0:0:0:0:0:0:0:1:0:0:0:0    12  0.20134228
+##  0:0:0:0:0:0:0:0:1:0:0:0:1     6  0.10067114
+##  0:0:0:0:0:0:0:0:1:0:1:0:0    17  0.28523490
+##  0:0:0:0:0:0:0:0:1:0:1:0:1     2  0.03355705
+##  0:0:0:0:0:0:0:1:0:0:0:0:0   133  2.23154362
+##  0:0:0:0:0:0:0:1:0:0:0:0:1    28  0.46979866
+##  0:0:0:0:0:0:0:1:0:0:1:0:0    25  0.41946309
+##  0:0:0:0:0:0:0:1:0:0:1:0:1     5  0.08389262
+##  0:0:0:0:0:0:0:1:1:0:0:0:0    91  1.52684564
+##  0:0:0:0:0:0:0:1:1:0:0:0:1    14  0.23489933
+##  0:0:0:0:0:0:0:1:1:0:1:0:0    87  1.45973154
+##  0:0:0:0:0:0:0:1:1:0:1:0:1     8  0.13422819
+##  0:0:0:0:0:0:0:1:1:1:1:1:0    62  1.04026846
+##  0:0:0:0:0:0:0:1:1:1:1:1:1    22  0.36912752
+##  0:0:0:0:0:0:1:0:0:0:0:0:0   184  3.08724832
+##  0:0:0:0:0:0:1:0:0:0:0:0:1    37  0.62080537
+##  0:0:0:0:0:0:1:0:0:0:1:0:0     4  0.06711409
+##  0:0:0:0:0:0:1:0:0:0:1:0:1     3  0.05033557
+##  0:0:0:0:0:0:1:0:0:1:0:0:0    16  0.26845638
+##  0:0:0:0:0:0:1:0:0:1:0:0:1     1  0.01677852
+##  0:0:0:0:0:0:1:0:1:0:0:0:1     1  0.01677852
+##  0:0:0:0:0:0:1:0:1:0:1:0:0    10  0.16778523
+##  0:0:0:0:0:0:1:0:1:0:1:0:1     1  0.01677852
+##  0:0:0:0:0:0:1:1:0:0:0:0:1     1  0.01677852
+##  0:0:0:0:0:0:1:1:1:0:0:0:0     7  0.11744966
+##  0:0:0:0:0:0:1:1:1:0:0:0:1     1  0.01677852
+##  0:0:0:0:0:0:1:1:1:1:1:1:0    43  0.72147651
+##  0:0:0:0:0:0:1:1:1:1:1:1:1     8  0.13422819
+##  0:0:0:1:0:0:0:0:0:0:0:0:0    15  0.25167785
+##  0:0:0:1:0:0:0:0:0:0:0:0:1    54  0.90604027
+##  0:0:0:1:0:0:0:0:1:0:0:0:0     1  0.01677852
+##  0:0:0:1:0:0:0:0:1:0:0:0:1     1  0.01677852
+##  0:0:0:1:0:0:0:1:0:0:0:0:0     2  0.03355705
+##  0:0:0:1:0:0:0:1:0:0:0:0:1     3  0.05033557
+##  0:0:0:1:0:0:0:1:1:0:0:0:1     1  0.01677852
+##  0:0:0:1:0:0:0:1:1:1:1:1:0     2  0.03355705
+##  0:0:0:1:0:0:0:1:1:1:1:1:1     4  0.06711409
+##  0:0:0:1:0:0:1:0:0:0:0:0:0     1  0.01677852
+##  0:0:0:1:0:0:1:0:0:0:0:0:1     1  0.01677852
+##  0:0:1:0:0:0:0:0:0:0:0:0:0   176  2.95302013
+##  0:0:1:0:0:0:0:0:0:0:0:0:1    55  0.92281879
+##  0:0:1:0:0:0:0:0:0:1:0:0:0    19  0.31879195
+##  0:0:1:0:0:0:0:0:0:1:0:0:1     4  0.06711409
+##  0:0:1:0:0:0:0:0:1:0:1:0:0    12  0.20134228
+##  0:0:1:0:0:0:0:0:1:0:1:0:1     1  0.01677852
+##  0:0:1:0:0:0:0:1:1:0:0:0:0    14  0.23489933
+##  0:0:1:0:0:0:0:1:1:0:0:0:1     1  0.01677852
+##  0:0:1:0:0:0:0:1:1:0:1:0:0     9  0.15100671
+##  0:0:1:0:0:0:0:1:1:0:1:0:1     1  0.01677852
+##  0:0:1:0:0:0:0:1:1:1:1:1:0     4  0.06711409
+##  0:0:1:0:0:0:0:1:1:1:1:1:1     9  0.15100671
+##  0:0:1:0:0:0:1:0:0:0:0:0:0    53  0.88926174
+##  0:0:1:0:0:0:1:0:0:0:0:0:1    13  0.21812081
+##  0:0:1:0:0:0:1:0:1:0:1:0:0    12  0.20134228
+##  0:0:1:0:0:0:1:0:1:0:1:0:1     1  0.01677852
+##  0:0:1:0:0:0:1:1:0:0:0:0:0     6  0.10067114
+##  0:0:1:0:0:0:1:1:0:0:0:0:1     1  0.01677852
+##  0:0:1:0:0:0:1:1:1:0:1:0:0    40  0.67114094
+##  0:0:1:0:0:0:1:1:1:0:1:0:1     4  0.06711409
+##  0:0:1:0:0:0:1:1:1:1:1:1:0    47  0.78859060
+##  0:0:1:0:0:0:1:1:1:1:1:1:1     9  0.15100671
+##  0:0:1:1:0:0:0:0:0:0:0:0:0     4  0.06711409
+##  0:0:1:1:0:0:0:0:0:0:0:0:1     6  0.10067114
+##  0:0:1:1:0:0:0:0:0:1:0:0:1     1  0.01677852
+##  0:0:1:1:0:0:0:1:0:0:1:0:1     1  0.01677852
+##  0:0:1:1:0:0:0:1:1:0:0:0:1     3  0.05033557
+##  0:0:1:1:0:0:0:1:1:1:1:1:1     2  0.03355705
+##  0:0:1:1:0:0:1:1:1:1:1:1:0     6  0.10067114
+##  0:0:1:1:0:0:1:1:1:1:1:1:1     4  0.06711409
+Run mice function to impute values for NAs
+mice_hmeq = mice(hmeq_input, m=5, printFlag=FALSE, maxit = 5, seed=2525)
+
+summary(mice_hmeq)
+## Multiply imputed data set
+## Call:
+## mice(data = hmeq_input, m = 5, maxit = 5, printFlag = FALSE, 
+##     seed = 2525)
+## Number of multiple imputations:  5
+## Missing cells per column:
+##     BAD    LOAN MORTDUE   VALUE  REASON     JOB     YOJ   DEROG  DELINQ 
+##       0       0     518     112       0       0     515     708     580 
+##   CLAGE    NINQ    CLNO DEBTINC 
+##     308     510     222    1267 
+## Imputation methods:
+##     BAD    LOAN MORTDUE   VALUE  REASON     JOB     YOJ   DEROG  DELINQ 
+##      ""      ""   "pmm"   "pmm"      ""      ""   "pmm"   "pmm"   "pmm" 
+##   CLAGE    NINQ    CLNO DEBTINC 
+##   "pmm"   "pmm"   "pmm"   "pmm" 
+## VisitSequence:
+## MORTDUE   VALUE     YOJ   DEROG  DELINQ   CLAGE    NINQ    CLNO DEBTINC 
+##       3       4       7       8       9      10      11      12      13 
+## PredictorMatrix:
+##         BAD LOAN MORTDUE VALUE REASON JOB YOJ DEROG DELINQ CLAGE NINQ CLNO
+## BAD       0    0       0     0      0   0   0     0      0     0    0    0
+## LOAN      0    0       0     0      0   0   0     0      0     0    0    0
+## MORTDUE   1    1       0     1      1   1   1     1      1     1    1    1
+## VALUE     1    1       1     0      1   1   1     1      1     1    1    1
+## REASON    0    0       0     0      0   0   0     0      0     0    0    0
+## JOB       0    0       0     0      0   0   0     0      0     0    0    0
+## YOJ       1    1       1     1      1   1   0     1      1     1    1    1
+## DEROG     1    1       1     1      1   1   1     0      1     1    1    1
+## DELINQ    1    1       1     1      1   1   1     1      0     1    1    1
+## CLAGE     1    1       1     1      1   1   1     1      1     0    1    1
+## NINQ      1    1       1     1      1   1   1     1      1     1    0    1
+## CLNO      1    1       1     1      1   1   1     1      1     1    1    0
+## DEBTINC   1    1       1     1      1   1   1     1      1     1    1    1
+##         DEBTINC
+## BAD           0
+## LOAN          0
+## MORTDUE       1
+## VALUE         1
+## REASON        0
+## JOB           0
+## YOJ           1
+## DEROG         1
+## DELINQ        1
+## CLAGE         1
+## NINQ          1
+## CLNO          1
+## DEBTINC       0
+## Random generator seed value:  2525
+Stage 4 and Stage 5
+we chose the mice imputation with the smallest standard deviation.
+hmeq_complete_dataset = complete(mice_hmeq)
+
+hmeq_reg = lm(BAD ~ LOAN + MORTDUE + VALUE + YOJ + DEROG + DELINQ + CLAGE+ NINQ + CLNO + DEBTINC, data = hmeq_complete_dataset)
+
+plot(hmeq_reg)
+    
+summary(hmeq_reg)
+## 
+## Call:
+## lm(formula = BAD ~ LOAN + MORTDUE + VALUE + YOJ + DEROG + DELINQ + 
+##     CLAGE + NINQ + CLNO + DEBTINC, data = hmeq_complete_dataset)
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -1.06557 -0.19040 -0.10745  0.00075  1.36512 
+## 
+## Coefficients:
+##               Estimate Std. Error t value Pr(>|t|)    
+## (Intercept)  2.413e-02  2.176e-02   1.109    0.268    
+## LOAN        -2.920e-06  4.381e-07  -6.665 2.88e-11 ***
+## MORTDUE     -1.061e-06  2.257e-07  -4.702 2.63e-06 ***
+## VALUE        9.109e-07  1.764e-07   5.164 2.50e-07 ***
+## YOJ         -1.096e-03  6.173e-04  -1.775    0.076 .  
+## DEROG        7.934e-02  5.555e-03  14.283  < 2e-16 ***
+## DELINQ       1.142e-01  4.167e-03  27.391  < 2e-16 ***
+## CLAGE       -5.408e-04  5.538e-05  -9.766  < 2e-16 ***
+## NINQ         2.238e-02  2.702e-03   8.284  < 2e-16 ***
+## CLNO        -2.538e-03  5.061e-04  -5.015 5.44e-07 ***
+## DEBTINC      8.055e-03  5.135e-04  15.688  < 2e-16 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 0.3483 on 5949 degrees of freedom
+## Multiple R-squared:  0.2417, Adjusted R-squared:  0.2404 
+## F-statistic: 189.6 on 10 and 5949 DF,  p-value: < 2.2e-16
+We also note down the RSS = 34.8% so that we can compare it to the result obtained after removing the outliers.
+Stage 6 and Stage 7
+Use the mahalanobis distance to detect and remove outliers:
+m_dist = mahalanobis(hmeq_complete_dataset[,-c(1,5,6)], colMeans(hmeq_complete_dataset[,-c(1,5,6)]), cov(hmeq_complete_dataset[,-c(1,5,6)]));
+
+no_of_rows_outliers = which(m_dist > 100)
+no_of_outliers = hmeq_complete_dataset[no_of_rows_outliers,];
+ 
+hmeq_final_dataset = hmeq_complete_dataset[-c(no_of_rows_outliers),]
+
+hmeq_reg_final = lm(BAD ~ LOAN + MORTDUE + VALUE + YOJ + DEROG + DELINQ + CLAGE+ NINQ + CLNO + DEBTINC, data = hmeq_final_dataset)
+summary(hmeq_reg_final)
+## 
+## Call:
+## lm(formula = BAD ~ LOAN + MORTDUE + VALUE + YOJ + DEROG + DELINQ + 
+##     CLAGE + NINQ + CLNO + DEBTINC, data = hmeq_final_dataset)
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -1.06481 -0.19164 -0.10435  0.01322  1.22406 
+## 
+## Coefficients:
+##               Estimate Std. Error t value Pr(>|t|)    
+## (Intercept)  2.554e-02  2.340e-02   1.092   0.2750    
+## LOAN        -2.545e-06  4.544e-07  -5.600 2.24e-08 ***
+## MORTDUE     -6.762e-07  2.853e-07  -2.370   0.0178 *  
+## VALUE        4.886e-07  2.347e-07   2.082   0.0374 *  
+## YOJ         -5.943e-04  6.171e-04  -0.963   0.3355    
+## DEROG        7.966e-02  5.933e-03  13.426  < 2e-16 ***
+## DELINQ       1.228e-01  4.438e-03  27.667  < 2e-16 ***
+## CLAGE       -6.760e-04  5.860e-05 -11.536  < 2e-16 ***
+## NINQ         2.197e-02  2.707e-03   8.116 5.82e-16 ***
+## CLNO        -1.995e-03  5.109e-04  -3.905 9.53e-05 ***
+## DEBTINC      8.412e-03  5.793e-04  14.522  < 2e-16 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 0.346 on 5902 degrees of freedom
+## Multiple R-squared:  0.2412, Adjusted R-squared:  0.2399 
+## F-statistic: 187.6 on 10 and 5902 DF,  p-value: < 2.2e-16
+SO,we can find out outliers which is having Mahalanobis distance greater than 100 by analysing the above figure of M-distance plotted together. We can also compare residual error after removing the outliers which is decresed significantly. Hence, we can get the final dataset by removing outliers from the complete dataset.
