@@ -1,0 +1,770 @@
+
+## Problem Statement Summary
+
+#In 2016 MCA Technology Solutions was hired to find a reliable way to identify earnings manipulators for several Indian banks. Earnings manipulation is a rare occurence (~2.9%) with serious consequences to banks if undetected, as it could lead a bank to provide much riskier loans than it can afford resulting in non-performing assets being included in larger investment portfolios.
+
+#In this situation, it will be important to account for an unbalanced data set and to consider different costs for False Positives vs False Negatives. The trade off to consider is the consequence of providing a riskier than intended loan to an undetected manipulator (FN) versus the consequence of not providing a loan (or providing at less favorable terms) to a falsely identified manipulator (FP). Given that a falsely identified manipulator can request further review (after all, they have every incentive to cooperate with an investigation), whereas no further action would normally happen for an undetected manipulator, we will assign more cost to False Negatives.
+
+#MCA Technology Solutions decided to follow a similar approach to that of the Beneish Model (https://www.scribd.com/doc/33484680/The-Detection-of-Earnings-Manipulation-Messod-D-Beneish), which includes eight variables common in public financial reporting and which results in an M-score that is generally interpreted as indicating a manipulator if it's less than -2.22. This M-score, is simply the output of the Beneish Model:
+#M Score = -4.840 + 0.920 x DSRI + 0.528 x GMI + 0.404 x AQI + 0.892 x SGI + 0.115 x DEPI - 0.172 x SGAI - 0.327 x LVGI + 4.697 x ACCR
+#This model was developed using US companies (excluding financial product companies, such as banks). Overall, the basic idea of the model should be applicable to the Indian companies being studied (which we will test), but the actual coefficients and cutoff point will likely need to be remodeled. Also, given the rise of ensemble methods like bagging, random forest, and boosting since the development of the Beneish model, these methods should also be explored for potentially greater predictive power.
+
+#Apart from the problem of which model to choose in this situation, the unbalanced nature of the data with only <4% of it being the positive class. The first concern is that the basic measure of accuracy won't be a useful measure of model performance. For example, the complete data set has 39 manipulators out of 1239 total observations. If we compare the accuracy of a perfect model to that of a null model (assumes no manipulators predicted), we get (1200+39)/1239 = 1 and (1200+0)/1239 = .968. So, we turn to performance measures like ROC and minimization of measures like False Negative Rate (fnr) (ie minimize of misclassification of actual manipulators). The minimization of fnr will be done with a combination of cost curves and iterative inspection of cutoff points vs fnr.
+
+#To address the issue of unbalanced data, we will investigate several different sampling techniques, evalute their performance on test data with a logit model and then choose the highest performer to use as the balanced training data for other models, such as CART, randomforest, and boosting.
+
+## Environment
+
+These are the packages that will be used:
+library(rpart, quietly = TRUE)
+library(rpart.plot, quietly = TRUE)
+library(randomForest, quietly = TRUE)
+library(ROCR, quietly = TRUE)
+library(caret, quietly = TRUE)
+library(adabag, quietly = TRUE)
+library(mboost, quietly = TRUE)
+library(dplyr, quietly = TRUE)
+library(readr, quietly = TRUE)
+library(readxl, quietly = TRUE)
+library(ROSE, quietly = TRUE)
+library(DMwR, quietly = TRUE)
+
+
+## Data Ingest and Clean-up
+The data is in an excel spreadsheet in multiple tabs, with two identical target variables:
+  Manipulator  
+C-MANIPULATOR  
+Only one is required, so C-MANIPULATOR will be removed.
+
+Potential prediction variables included are:  
+  DSRI - Days Sales to Recievables Index  
+GMI - Gross Margin Index  
+AQI - Asset Quality Index  
+SGI - Sales Growth Index  
+DEPI - Depreciation Index  
+SGAI - Sales General and Adminstrative Index  
+ACCR - Accrual to Total Assets  
+LEVI - Leverage Index  
+A Company ID is also included, but will not be used in analysis.
+
+library(readxl)
+complete <- read_excel('casedata.xlsx', sheet = 'Complete Data')
+sample <- read_excel('casedata.xlsx', sheet = 'Sample for Model Development')
+
+names(complete)[10] <- 'Manipulator'     # Fixes spelling error
+names(complete)[1] <- 'CompanyID'     # Simplifies referencing
+names(sample)[1] <- 'CompanyID'     # Simplifies referencing
+
+sample$Manipulator <- ifelse(sample$Manipulator == 'Yes', 1, 0)
+complete$Manipulator <- ifelse(complete$Manipulator == 'Yes', 1, 0)
+sample$Manipulator <- as.factor(sample$Manipulator)
+complete$Manipulator <- as.factor(complete$Manipulator)
+
+# Remove non-predictive variables
+complete <- subset(complete, select = -c(CompanyID, `C-MANIPULATOR`))
+sample <- subset(sample, select = -c(CompanyID, `C-MANIPULATOR`))
+
+
+#Next we'll abstract the target variable and full formula (target variable vs all remaining predictors) to enable easier code reuse and then split the sample dataset into 70% train and 30% test sets for use in developing initial logistic regression model.
+
+tgt_var <- 'Manipulator'
+pos_cls <- '1'
+formula_full <- as.formula(paste(tgt_var,' ~ ', ' .'))
+wk <- sample
+trainpct <- .7
+seed <- 1234
+
+
+
+## Investigate performance of 1999 Beneish Model
+
+#Here, we will create a logistic regression model on the training data and then replace its coefficients with those determined by Beneish. The cutoff of .131 is based on using the heaviest FN:FP cost ratio from the following chart derived from the Beneish model:
+
+Score	Relative Error Costs  
+M Score FN:FP   Cutoff  
+-1.49   (10:1)  0.184  
+-1.78   (20:1)  0.144  
+-1.89   (40+:1) 0.131  
+
+#Using the highest cost ratio will minimize FN, which, as we discussed in the introduction should be weighted more heavily, which concurs with the discussion in the 1999 Beneish model.
+
+
+beneish <- glm(formula_full, data = complete, family = 'binomial')
+
+beneish$coefficients <- c(-4.840, 0.920, 0.528, 0.404, 0.892, 0.115, -0.172, 4.697, -0.327)
+beneish
+
+cutoff <- .131
+
+eval_model <- beneish
+
+cm <- table(predict(eval_model, newdata = complete, type = 'response')>=cutoff, complete[[tgt_var]], dnn = c("Pred", "Actual"))
+cm
+accuracy<-sum(diag(cm))/sum(cm)
+accuracy
+
+
+#Next, let's look at Beneish performance on the Sample and Complete dataset using ROC AUC as a performance measure. Additionally, we'll look at a range of Cost charts with FP:FN ratios used by Beneish.
+
+eval_model <- beneish
+
+# ROC  on sample data
+eval_data <- sample
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title('ROC for 1999 Beneish Model on Sample data')
+
+# ROC  on complete data
+eval_data <- complete
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title('ROC for 1999 Beneish Model on Complete data')
+
+# Cost vs Cutoff charts on sample dataset
+eval_data <- sample
+
+pred <- prediction(predict(eval_model, newdata = eval_data, type = 'response'), eval_data[[tgt_var]])
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 10) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:10")
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 20) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:20")
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 40) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:40")
+
+# Cost vs  Cutoff charts on complete dataset
+eval_data <- complete
+pred <- prediction(predict(eval_model, newdata = eval_data, type = 'response'), eval_data[[tgt_var]])
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 10) 
+plot(cost, main="Complete Cost vs Cutoff Curve FP:FN Costs - 1:10")
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 20) 
+plot(cost, main="Complete Cost vs Cutoff Curve FP:FN Costs - 1:20")
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 40) 
+plot(cost, main="Complete Cost vs Cutoff Curve FP:FN Costs - 1:40")
+
+
+#As we can see, beneish works relatively well on our data, with a AUC values above 0.90 for both the sample and complete datasets. Additionally, with the complete dataset cost vs cutoff charts we can clearly see the genesis of the cutoff value progressing from ~0.2 to ~0.1 as the FP:FM ratio increases.
+
+## Create Initial Logistic Regression Model
+
+#Now that we've investigated the performance of the existing 1999 Beneish model on our data, let's see if we can improve on it by building our own Logistic Regression model to predict the binary target variable (ie Yes or No to being a manipulator). The initial cutoff point for predictions will be a naive value of 0.5 that will be refined through use of weighted costs as discussed earlier. Variable selection will also be performed to omit insignificant predictor variables. Of note, Beneish found that LEVI, SGI, and DEPI were insignificant and determined that they might be due to earnings management, rather than earning manipulation. As such, some sources will refer to the 5 variable vs 8 variable Beneish M-Score. Here, we'll develop a model with all 8 variables and a model resulting from variable selection techniques.
+
+#We'll also perform a variety of sampling techniques to balance the data, focusing first on the sample dataset. Methods considered are oversampling, undersampling, over&undersampling together, SMOTE (Synthetic Minority Over-sampling Technique), and ROSE (Randomly Over Sampling Examples).
+
+#Let's set a naive cutoff intitially:
+
+cutoff <- .5
+
+#Oversampling:
+
+
+wk <- sample
+sample_method <- "over"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+over_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- over_glm
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = trainData, type = 'response')>=cutoff, trainData[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- over_glm
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = trainData, type = 'response')>=cutoff, trainData[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#Undersampling:
+
+wk <- sample
+sample_method <- "under"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+under_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- under_glm
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- under_glm
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#Over and Under sampling:
+
+wk <- sample
+sample_method <- "both"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+both_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- both_glm
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- both_glm
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#SMOTE:
+
+wk <- sample
+sample_method <- "SMOTE"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- SMOTE(formula_full, data = as.data.frame(trainData_orig), perc.over = 100, perc.under=200)
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+smote_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- smote_glm
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- smote_glm
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#ROSE:
+
+wk <- sample
+sample_method <- "ROSE"
+
+trainData <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ROSE(formula_full, data = trainData_orig)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+rose_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- rose_glm
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for','SMOTE','sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- rose_glm
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+# Pick sampling method
+
+#Based on the results above, we will proceed using the oversampling, as it had the highest AUC on testData with a value around 0.93.
+
+# Perform Variable Selection on over_glm
+
+wk <- sample
+sample_method <- "over"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+over_glm <- glm(formula = formula_full, family = binomial, data = trainData)
+summary(over_glm)
+
+over_glm_select <- step(over_glm, data = trainData, direction = 'both')
+summary(over_glm_select)
+
+
+#As you can see above, DEPI, SGAI, and LEVI aren't significant to model. These are the same variable that Beneish found to be insignificant with the theory that they are indicators of earnings management rather earnings manipulation. The step-wise variable select technique removed two of the variables, but left one in, only decreasing the AIC by small amount. Given the low decrease in AIC gained by removing these variables, we'll continue to consider them in the model.
+
+# Cutoff Determination
+#Now based on the results of the evaluation, we need to determine suitable cutoff points. To get Cost vs Cutoff Probability charts, we simply omit the second measure term from the performance function.
+
+# Cost vs Cutoff charts on testData from sample dataset
+eval_model <- over_glm
+eval_data <- testData
+
+pred <- prediction(predict(eval_model, newdata = eval_data, type = 'response'), eval_data[[tgt_var]])
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 10) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:10")
+axis(side=1, at=seq(0, 1, by=.1))
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 20) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:20")
+axis(side=1, at=seq(0, 1, by=.1))
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 40) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:40")
+axis(side=1, at=seq(0, 1, by=.1))
+
+
+#Based on the Cost vs Cutoff charts above, the optimal cutoff value is between .3 and .4, so lets, test several iterations between those values to determine the optimal cutoff by minimizing the FNs.
+
+eval_model <- over_glm
+eval_data <- testData
+for(i in c(.3,.31,.32,.33,.34,.35,.36,.37,.38,.39,.4,.41,.42,.43)){
+  cutoff <- i
+  cm <- table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+  print(i)
+  print(cm)
+}
+
+
+#Based on the above, the ideal cutoff to balance bring FN to almost 0 and minimizing FP is 0.42. with this cutoff, we can calculate an M-Score by taking the log(odds) of it.
+
+opt_cutoff <- .42
+mscore_cutoff <- log(opt_cutoff/(1-opt_cutoff))
+mscore_cutoff
+
+
+#So, like Beneish, we are able to calculate that an M-Score less than -.3228 is a strong indication of a manipulator. With this information, we recommend that MCA Technology Solutions use this score in conjunction with the over_glm model to detect earnings manipulators.
+
+## CART Decision Tree
+
+Now, to ensure that we have the best model, we continue by developing a CART model.
+
+# Construct a decision tree model using rpart() from "rpart" package
+
+
+sample_rpart = rpart(formula_full, data = trainData, method = "class",control = rpart.control(minsplit = 10, cp=-1, minbucket = 0))
+
+sample_rpart
+rpart.plot(sample_rpart)
+
+
+# Determine optimal cp using minimum xerror, then prune tree with optimal cp
+opt <- which.min(sample_rpart$cptable[ ,"xerror"])
+cp <- sample_rpart$cptable[opt, "CP"]
+
+sample_prune <- prune(sample_rpart, cp = cp)
+
+sample_prune
+rpart.plot(sample_prune)
+
+
+
+# Evaluate the pruned CART model
+
+eval_model <- sample_prune
+eval_data <- trainData
+pos_cls <- '1'
+pred <- predict(eval_model, type = 'prob', newdata = eval_data)[ ,pos_cls]
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train data ROC for', 'Pruned CART Model', sep = ' '))
+
+print('sample_prune with trainData')
+cm <- table(predict(eval_model, newdata = eval_data, type = 'class'), eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+cm
+
+eval_model <- sample_prune
+eval_data <- testData
+pred <- predict(eval_model, type = 'prob', newdata = eval_data)[ ,pos_cls]
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for', 'Pruned CART Model', sep = ' '))
+
+print('sample_prune with testData')
+cm <- table(predict(eval_model, newdata = eval_data, type = 'class'), eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+cm
+
+
+#After evaluating the CART model, we see improvement in FP rate with a 50% increase in the FN rate (although the previous FN rate was quite low). AUC is about .90, which is a bit worse than the AUC of about .93 that we were getting with the logit model.
+
+## Logit Model with Complete dataset
+
+Now let's try buidling a logit model with the complete dataset!
+
+cutoff <- .5  #Reset Naive cutoff
+
+
+#Oversampling:
+
+wk <- complete
+sample_method <- "over"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+over_glm_comp <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- over_glm_comp
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = trainData, type = 'response')>=cutoff, trainData[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- over_glm_comp
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = trainData, type = 'response')>=cutoff, trainData[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#Undersampling:
+
+wk <- complete
+sample_method <- "under"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+under_glm_comp <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- under_glm_comp
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- under_glm_comp
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+#Over and Under sampling:
+
+wk <- complete
+sample_method <- "both"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ovun.sample(formula_full, data = trainData_orig, method = sample_method)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+both_glm_comp <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- both_glm_comp
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- both_glm_comp
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+
+#SMOTE:
+
+wk <- complete
+sample_method <- "SMOTE"
+
+trainData_orig <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- SMOTE(formula_full, data = as.data.frame(trainData_orig), perc.over = 100, perc.under=200)
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+smote_glm_comp <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- smote_glm_comp
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- smote_glm_comp
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+
+#ROSE:
+
+wk <- complete
+sample_method <- "ROSE"
+
+trainData <- wk[sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE), ]
+testData <- wk[setdiff(1:nrow(wk), sample(1:nrow(wk), round(trainpct*nrow(wk)) , replace = FALSE)),]
+
+trainData <- ROSE(formula_full, data = trainData_orig)$data
+table(trainData[[tgt_var]])
+table(testData[[tgt_var]])
+
+rose_glm_comp <- glm(formula = formula_full, family = binomial, data = trainData)
+
+eval_model <- rose_glm_comp
+eval_data <- trainData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train Data ROC for','SMOTE','sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+eval_model <- rose_glm_comp
+eval_data <- testData
+pred <- predict(eval_model, type = 'response', newdata = eval_data)
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for',sample_method,'sampled logit model', sep = ' '))
+table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+
+
+
+# Pick sampling method
+
+#Based on the results above, we will proceed using over & under sampling, as it had the highest AUC on testData with a value around 0.95.
+
+#Next we would perform variable selection, but as we decided to leave all the variables in last time, we'll skip it here and move on to cutoff determination.
+
+# Cutoff Determination
+#Based on the results of the evaluation, we need to determine suitable cutoff points. To get Cost vs Cutoff Probability charts, we simply omit the second measure term from the performance function.
+
+# Cost vs Cutoff charts on testData from sample dataset
+eval_model <- both_glm_comp
+eval_data <- testData
+
+pred <- prediction(predict(eval_model, newdata = eval_data, type = 'response'), eval_data[[tgt_var]])
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 10) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:10")
+axis(side=1, at=seq(0, 1, by=.1))
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 20) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:20")
+axis(side=1, at=seq(0, 1, by=.1))
+
+cost <- performance(pred,"cost", cost.fp = 1, cost.fn = 40) 
+plot(cost, main="Sample Cost vs Cutoff Curve FP:FN Costs - 1:40")
+axis(side=1, at=seq(0, 1, by=.1))
+
+
+#Based on the Cost vs Cutoff charts above, the optimal cutoff value is between .55 and .65, so lets, test several iterations between those values to determine the optimal cutoff by minimizing the FNs.
+
+eval_model <- over_glm_comp
+eval_data <- testData
+for(i in c(.54,.55,.56,.57,.58,.59,.60,.61,.62,.63,.64,.65,.66,.67,.68)){
+  cutoff <- i
+  cm <- table(predict(eval_model, newdata = eval_data, type = 'response')>=cutoff, eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+  print(i)
+  print(cm)
+}
+
+
+#Based on the above, the ideal cutoff to balance bringing FN to almost 0 and minimizing FP is 0.66. with this cutoff, we can calculate an M-Score by taking the log(odds) of it.
+
+opt_cutoff <- .66
+mscore_cutoff <- log(opt_cutoff/(1-opt_cutoff))
+mscore_cutoff
+
+
+#Again, with this new model developed from the complete data, we have a new M Score, such that any M-Score below 0.6633 is reason to suspect a manipulator.
+
+## Random Forest
+
+#Now, we move to ensemble methods with a random forest model. It is unlikely that Beneish was aware of random forest when the 1999 model was developed as random forest was first proposed in 1995 by Ho (http://ect.bell-labs.com/who/tkh/publications/papers/odt.pdf)
+
+# Create the random forest model
+
+
+rf = randomForest(formula_full, data = trainData, ntree = 1000, proximity = TRUE, replace= TRUE, sampsize = ceiling(0.65*nrow(trainData)), importance = TRUE, mtry = sqrt(ncol(trainData)))
+
+# ntree indicates the number of trees to grow
+# mtry indicates the number of variables selected at each split
+# replace = T indicates that sampling of instances should be done with replacement
+# sampsize indicates the size(s) if sample to draw
+# importance = T indicates the importances of predictors should be assessed
+# Proximity = T indicates that the proximity between rows should be calculated
+
+print(rf) 
+
+plot(rf) # plots the error rate on oob set and for each class
+legend("topright", legend = colnames(rf$err.rate), cex = 0.5, lty = c(1,2,3,4), col = c(1,2,3,4), horiz = T)
+
+
+importance(rf) #provide imporant variables
+# Mean decrease accuracy  is how much of the model accuracy decreases if we drop that variable
+varImpPlot(rf) #plots the important variables based on the MSEdecrease or Ginidecrease values
+
+
+# Evaluate the Random Forest Model
+
+eval_model <- rf
+eval_data <- trainData
+pos_cls <- '1'
+pred <- predict(eval_model, type = 'prob', newdata = eval_data)[ ,pos_cls]
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Train data ROC for', 'Random Forest Model', sep = ' '))
+
+print('Random Forest with trainData')
+cm <- table(predict(eval_model, newdata = eval_data, type = 'class'), eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+cm
+
+eval_model <- rf
+eval_data <- testData
+pred <- predict(eval_model, type = 'prob', newdata = eval_data)[ ,pos_cls]
+roc <- roc.curve(eval_data[[tgt_var]], pred, main = NULL)
+legend(0.5, 0.5, paste(c("AUC = "), roc$auc, sep = ""), cex = 0.7, box.col = "white")
+title(paste('Test data ROC for', 'Random Forest Model', sep = ' '))
+
+print('Random Forest with testData')
+cm <- table(predict(eval_model, newdata = eval_data, type = 'class'), eval_data[[tgt_var]], dnn = c("Pred", "Actual"))
+cm
+
+
+#Now, we've seen a signifcant improvement over the other models.
+
+
+#Performing gradient boosting on oversampled data and testing it on orignal test data
+
+library(readr)
+oversamplingtrain <- read_csv("C:/Users/Prafful/Downloads/oversamplingtrain.csv")
+testsample <- read_csv("C:/Users/Prafful/Downloads/testsample.csv")
+oversamplingtrain$CMANIPULATOR = as.factor(oversamplingtrain$CMANIPULATOR)
+testsample$CMANIPULATOR = as.factor(testsample$CMANIPULATOR)
+
+#Boosting 
+
+library(mboost)
+
+boost_model = mboost(CMANIPULATOR~DSRI+GMI+AQI+SGI+DEPI+SGAI+ACCR+LEVI , data = oversamplingtrain, family = Binomial(),boost_control(mstop=100), baselearner = 'btree')
+boost_model
+pred = predict(boost_model, newdata = testsample, type = 'class')
+matrix =  table(pred, testsample$CMANIPULATOR)
+matrix
+accuracy = (sum(diag(matrix))/sum(matrix))*100
+accuracy
+
+#Accuracy of the gradient model is 94.11%
+
+library(ROCR)
+
+pred1 = prediction(predict(boost_model, newdata = testsample), testsample$CMANIPULATOR)
+perf = performance(pred1,"tpr","fpr")
+plot(perf, lty = 3, lwd = 3)
+
+
+
+# Calculating AUC
+auc = performance(pred1, 'auc')
+
+# AUC for gradient boosting is 0.985
+
+# Now converting S4 class to a vector
+auc = unlist(slot(auc, "y.values"))
+
+# Adding min and max ROC AUC to the center of the plot
+minauc = min(round(auc, digits = 2))
+maxauc = max(round(auc, digits = 2))
+minauct = paste(c('min(AUC) = '), minauc, sep = '')
+maxauct = paste(c('max(AUC) = '), maxauc, sep = '')
+legend(0.7, 0.5, c(minauct, maxauct, '\n'), border = 'white', cex = 0.7, box.col = 'white')
+abline(a= 0, b=1)
+
+opt.cut = function(perf, pred1){
+cut.ind = mapply(FUN=function(x, y, p){
+d = (x - 0)^2 + (y-1)^2
+ind = which(d == min(d))
+c(sensitivity = y[[ind]], specificity = 1-x[[ind]],
+cutoff = p[[ind]])
+}, perf@x.values, perf@y.values, pred1@cutoffs)}
+print(opt.cut(perf, pred1))
+
+cost.perf = performance(pred1, 'cost', cost.fp =1, cost.fn = 4)
+pred1@cutoffs[[1]] [which.min(cost.perf@y.values[[1]])]
+
+mscore_cutoff <- log(0.09/(1-0.09))
+mscore_cutoff
