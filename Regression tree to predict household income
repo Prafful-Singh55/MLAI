@@ -1,0 +1,1246 @@
+##The dataset contains income represents an extract from a commercial marketing database. 
+##The goal is to fit a regression tree to predict the annual income of a household from 13 demographic attributes and
+#interpret the results. I wanted to use R-Studio to construct a decision tree to fulfill this task.
+
+
+
+# Import data and name columns based on income.info file
+library(readxl)
+income <- read_excel("income.data.xlsx", col_names = F)
+income_headings <- c('annualinc',
+              'sex',
+              'married',
+              'age',
+              'education',
+              'occupation',
+              'resident',
+              'dualinc',
+              'persontot',
+              'person18',
+              'homestat',
+              'hometype',
+              'ethnic',
+              'lang')
+colnames(income) <- income_headings
+str(income)
+## Classes 'tbl_df', 'tbl' and 'data.frame':    8993 obs. of  14 variables:
+##  $ annualinc : num  9 9 9 1 1 8 1 6 2 4 ...
+##  $ sex       : num  2 1 2 2 2 1 1 1 1 1 ...
+##  $ married   : chr  "1" "1" "1" "5" ...
+##  $ age       : num  5 5 3 1 1 6 2 3 6 7 ...
+##  $ education : chr  "4" "5" "5" "2" ...
+##  $ occupation: chr  "5" "5" "1" "6" ...
+##  $ resident  : chr  "5" "5" "5" "5" ...
+##  $ dualinc   : num  3 3 2 1 1 3 1 1 3 3 ...
+##  $ persontot : chr  "3" "5" "3" "4" ...
+##  $ person18  : num  0 2 1 2 2 0 1 0 0 0 ...
+##  $ homestat  : chr  "1" "1" "2" "3" ...
+##  $ hometype  : chr  "1" "1" "3" "1" ...
+##  $ ethnic    : chr  "7" "7" "7" "7" ...
+##  $ lang      : chr  "NA" "1" "1" "1" ...
+# Replace character NAs with R NAs, then count resulting NAs
+income[income[,names(income)] == "NA"] <- NA
+sum(is.na(income))
+## [1] 2694
+# All variables are categorical as defined in income.info file
+# For distribution investigation, I'm leaving annualinc as numeric and factoring all others
+income[,income_headings] <- lapply(income, as.factor)
+income$annualinc <- as.numeric(income$annualinc)
+
+# Part a:
+# 1) Without using a DT look at relation between the annual income and the other variables.
+# 2) Write a short summary of your observations.
+# 3) Which variables seem to be useful for predicting income? Why?
+
+#Part a1:
+# plot means of annualinc grouped by factors within each variable
+# plot distribution of each factor to get a sense of data distribution
+# significant variation of annualinc mean among factors could indicate a good predictive variable
+for (i in 1: ncol(income)) {
+  barplot(tapply(income$annualinc,income[,i],mean), main=c('Annual Income Means for ',names(income)[i]))
+  barplot(table(income[,i]), main=c('Factor Distribution for ',names(income)[i]))}
+                            
+# Two way ANOVA tests given quantitative dependent variable and many categorical dependent variables
+twowayaov.inc <- aov(annualinc~., data = income)
+summary(twowayaov.inc)
+##               Df Sum Sq Mean Sq F value   Pr(>F)    
+## sex            1    151     151  38.753 5.10e-10 ***
+## married        4  13397    3349 856.791  < 2e-16 ***
+## age            6   5989     998 255.369  < 2e-16 ***
+## education      5   2154     431 110.208  < 2e-16 ***
+## occupation     8   1796     225  57.432  < 2e-16 ***
+## resident       4    230      58  14.732 5.48e-12 ***
+## dualinc        2     42      21   5.431   0.0044 ** 
+## persontot      8    299      37   9.550 3.09e-13 ***
+## person18       9     73       8   2.062   0.0293 *  
+## homestat       2   1694     847 216.693  < 2e-16 ***
+## hometype       4    324      81  20.694  < 2e-16 ***
+## ethnic         7    143      20   5.212 6.10e-06 ***
+## lang           2     27      14   3.483   0.0308 *  
+## Residuals   6813  26632       4                     
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 2117 observations deleted due to missingness
+#Part a2:
+# Several variables standout as potential predictors due to noticably diffent annualinc means,
+# while others appear much less useful.
+
+#Part a3: Based on a combination of the lowest ANOVA p-values and
+# the most promising mean and distribution combinations, I expect the following variables to be the most predictive:
+# married, age, education, occupation, dualinc, homestat
+# All have lowest p-values (< 2e-16) with the following notes about mean and distribution
+# married: Married mean annual inc is greater than all other categories, Ok predictor
+# age: There's a clear relationship between mean annualinc and age. Prime predictor
+# education: There's a clear positive relationship between mean annualinc and education. Prime predictor
+# occupation: There's quite a bit of variation in mean annualinc among the categories. Strong predictor
+# dualinc: Wide spread between mean annualinc among factors. Ok predictor
+# homestat: Clear relationship between mean annualinc and factors. Strong predictor
+
+
+#Part b: 1) Divide your data into 60% train and 40% test.
+# 2) Create the default C&R decision tree.
+# 3) How many leaves are in the tree?
+# 4) What is the size of each leaf node?
+
+# Before proceding ensure all variables are factors
+income[,names(income)] <- lapply(income, as.factor)
+
+#Part b1:
+## separate the dataset into two parts of defined sizes:
+## training data: 60% = 5396
+## testing data: 40% = 3597
+
+trainsize <- round(.6*nrow(income))
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData = income[train.indices, ]
+testData = income[test.indices,]
+
+dim(trainData)
+## [1] 5396   14
+dim(testData)
+## [1] 3597   14
+# Part b2: Create default CART tree (ie leave all tree parameters as default)
+#install.packages("rpart")
+#install.packages("rpart.plot")
+library(rpart)
+train_rpart <- rpart(annualinc~., data = trainData)
+train_rpart
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##    2) occupation=6,9 1106  407 1 (0.63 0.08 0.044 0.037 0.024 0.042 0.041 0.052 0.047) *
+##    3) occupation=1,2,3,4,5,7,8 4290 3586 8 (0.079 0.093 0.082 0.11 0.094 0.15 0.12 0.16 0.11)  
+##      6) homestat=2,3 2369 2016 6 (0.12 0.14 0.12 0.13 0.12 0.15 0.097 0.089 0.037)  
+##       12) age=1,2,7 874  675 1 (0.23 0.22 0.16 0.12 0.073 0.074 0.05 0.055 0.029) *
+##       13) age=3,4,5,6 1495 1207 6 (0.064 0.094 0.096 0.14 0.14 0.19 0.12 0.11 0.041) *
+##      7) homestat=1 1921 1427 8 (0.023 0.035 0.036 0.075 0.067 0.14 0.15 0.26 0.21) *
+library(rpart.plot) 
+rpart.plot(train_rpart, main = "Income Rpart Tree - Part b")
+
+# Part b3&4: Number of inner nodes and terminal nodes. Need a function as.party from partykit.
+#install.packages("partykit")
+library(partykit)
+## Loading required package: grid
+ 
+#Output below contains number of leaves and the size (n) and error (err) for each.
+as.party(train_rpart)
+## 
+## Model formula:
+## annualinc ~ sex + married + age + education + occupation + resident + 
+##     dualinc + persontot + person18 + homestat + hometype + ethnic + 
+##     lang
+## 
+## Fitted party:
+## [1] root
+## |   [2] occupation in 6, 9: 1 (n = 1106, err = 36.8%)
+## |   [3] occupation in 1, 2, 3, 4, 5, 7, 8
+## |   |   [4] homestat in 2, 3
+## |   |   |   [5] age in 1, 2, 7: 1 (n = 874, err = 77.2%)
+## |   |   |   [6] age in 3, 4, 5, 6: 6 (n = 1495, err = 80.7%)
+## |   |   [7] homestat in 1: 8 (n = 1921, err = 74.3%)
+## 
+## Number of inner nodes:    3
+## Number of terminal nodes: 4
+#Part c: 1) What are the major predictors of income?
+# 2) How are they related to your observations in Part a?
+# 3) How well your decision tree can predict a household's income in your training data?
+
+#Part c1: 
+# The default tree used occupation, homestat, and age as major split variables.
+#Part c2:
+# Based on Part a analysis of each variable's relationship to annualinc, we identified
+# married, age, education, occupation, dualinc, and homestat as likely predictors.
+# Of these, married, education, and dualinc were not used by this particular tree.
+
+#Part c3
+#Check predictions on trainData
+predict.matrix.rpart <- table(predict(train_rpart, type = "class"), trainData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 898 277 186 145  91 111  89 106  77
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  95 141 144 206 212 288 185 162  62
+##         7   0   0   0   0   0   0   0   0   0
+##         8  45  68  69 145 128 278 297 494 397
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3113417
+# Check predictions on testData
+predict.matrix.rpart <- table(predict(train_rpart, newdata = testData, type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 598 149 106  88  79  76  62  94  57
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  70  93 111 152 132 156 136 115  44
+##         7   0   0   0   0   0   0   0   0   0
+##         8  39  47  51  77  80 201 200 337 247
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3033083
+# The prediction accuracies for this default Categorization and Regression tree (CART)
+# are each about 30% for both training and test data.
+
+
+#Part d: Give two decision rules that are useful for predicting annualinc.
+# Rule 1: If occupation is not Student or Unemployed Then Higher Annual Income
+# Rule 2: If homestat is Homeowner Then Higher Annual Income
+# Rule 1 is based on 80% of first split on occupation going to class 8 Annual Income
+# Rule 2 is based on 36% of next split on homestat going to class 8 Annual Income
+
+#Part e: 1) Were any any surrogate splits used in construction of tree?
+# 2) What does a surrogate split mean?
+# 3) Give an example of a surrogate split in your tree.
+summary(train_rpart)
+## Call:
+## rpart(formula = annualinc ~ ., data = trainData)
+##   n= 5396 
+## 
+##           CP nsplit rel error    xerror        xstd
+## 1 0.08375402      0 1.0000000 1.0000000 0.006643839
+## 2 0.03281322      1 0.9162460 0.9162460 0.007393589
+## 3 0.03074805      2 0.8834328 0.8875631 0.007594194
+## 4 0.01000000      3 0.8526847 0.8531436 0.007802387
+## 
+## Variable importance
+## occupation        age   homestat  education    married   hometype 
+##         39         21         19          7          5          5 
+##    dualinc 
+##          4 
+## 
+## Node number 1: 5396 observations,    complexity param=0.08375402
+##   predicted class=1  expected loss=0.8076353  P(node) =1
+##     class counts:  1038   486   399   496   431   677   571   762   536
+##    probabilities: 0.192 0.090 0.074 0.092 0.080 0.125 0.106 0.141 0.099 
+##   left son=2 (1106 obs) right son=3 (4290 obs)
+##   Primary splits:
+##       occupation splits as  RRRRRLRRL, improve=305.0223, (76 missing)
+##       age        splits as  LRRRRRR,   improve=292.1528, (0 missing)
+##       education  splits as  LLRRRR,    improve=235.4518, (56 missing)
+##       homestat   splits as  RRL,       improve=235.3764, (142 missing)
+##       married    splits as  RRRRL,     improve=178.1204, (84 missing)
+##   Surrogate splits:
+##       age       splits as  LRRRRRR, agree=0.856, adj=0.302, (76 split)
+##       education splits as  LLRRRR,  agree=0.832, adj=0.188, (0 split)
+##       homestat  splits as  RRL,     agree=0.828, adj=0.165, (0 split)
+## 
+## Node number 2: 1106 observations
+##   predicted class=1  expected loss=0.3679928  P(node) =0.2049666
+##     class counts:   699    89    49    41    27    46    45    58    52
+##    probabilities: 0.632 0.080 0.044 0.037 0.024 0.042 0.041 0.052 0.047 
+## 
+## Node number 3: 4290 observations,    complexity param=0.03281322
+##   predicted class=8  expected loss=0.8358974  P(node) =0.7950334
+##     class counts:   339   397   350   455   404   631   526   704   484
+##    probabilities: 0.079 0.093 0.082 0.106 0.094 0.147 0.123 0.164 0.113 
+##   left son=6 (2369 obs) right son=7 (1921 obs)
+##   Primary splits:
+##       homestat splits as  RLL,     improve=99.79647, (121 missing)
+##       married  splits as  RLLLL,   improve=86.12793, (58 missing)
+##       dualinc  splits as  LRR,     improve=78.11761, (0 missing)
+##       age      splits as  LLRRRRR, improve=71.38770, (0 missing)
+##       hometype splits as  RRLLL,   improve=54.45651, (166 missing)
+##   Surrogate splits:
+##       age        splits as  LLLRRRR,   agree=0.733, adj=0.404, (121 split)
+##       married    splits as  RLLRL,     agree=0.727, adj=0.391, (0 split)
+##       hometype   splits as  RRLRL,     agree=0.725, adj=0.387, (0 split)
+##       dualinc    splits as  LRR,       agree=0.708, adj=0.350, (0 split)
+##       occupation splits as  LLLLR-LR-, agree=0.624, adj=0.162, (0 split)
+## 
+## Node number 6: 2369 observations,    complexity param=0.03074805
+##   predicted class=6  expected loss=0.850992  P(node) =0.4390289
+##     class counts:   294   329   281   310   276   353   229   210    87
+##    probabilities: 0.124 0.139 0.119 0.131 0.117 0.149 0.097 0.089 0.037 
+##   left son=12 (874 obs) right son=13 (1495 obs)
+##   Primary splits:
+##       age        splits as  LLRRRRL,   improve=40.06424, (0 missing)
+##       occupation splits as  RLLLL-LL-, improve=31.37356, (47 missing)
+##       education  splits as  LLLLRR,    improve=22.48399, (21 missing)
+##       homestat   splits as  -RL,       improve=18.70340, (71 missing)
+##       married    splits as  RLLLL,     improve=18.00147, (28 missing)
+##   Surrogate splits:
+##       homestat   splits as  -RL,        agree=0.701, adj=0.189, (0 split)
+##       education  splits as  RLLRRR,     agree=0.660, adj=0.078, (0 split)
+##       occupation splits as  RLRRR-LL-,  agree=0.653, adj=0.061, (0 split)
+##       married    splits as  RRRLL,      agree=0.651, adj=0.054, (0 split)
+##       person18   splits as  RRRRRRLR--, agree=0.633, adj=0.005, (0 split)
+## 
+## Node number 7: 1921 observations
+##   predicted class=8  expected loss=0.7428423  P(node) =0.3560044
+##     class counts:    45    68    69   145   128   278   297   494   397
+##    probabilities: 0.023 0.035 0.036 0.075 0.067 0.145 0.155 0.257 0.207 
+## 
+## Node number 12: 874 observations
+##   predicted class=1  expected loss=0.7723112  P(node) =0.1619718
+##     class counts:   199   188   137   104    64    65    44    48    25
+##    probabilities: 0.228 0.215 0.157 0.119 0.073 0.074 0.050 0.055 0.029 
+## 
+## Node number 13: 1495 observations
+##   predicted class=6  expected loss=0.8073579  P(node) =0.2770571
+##     class counts:    95   141   144   206   212   288   185   162    62
+##    probabilities: 0.064 0.094 0.096 0.138 0.142 0.193 0.124 0.108 0.041
+# Part e1:
+# Based on the output above and with knowledge that NAs were present in the tree,
+# Surrogate splits were used.
+
+# Part e2:
+# A surrogate is a substitute for a split variable that is used if the primary split variable
+# is missing. Surrogate splits are calculated even if they're not used during model construction,
+# so that they will be available for use on future data (such as test data) that may have missing values.
+
+
+#Part f: Using Decision Tree, predict annual income of households in test data.
+# What is the error of your predictions?
+
+predict.matrix.rpart <- table(predict(train_rpart, newdata = testData, type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 598 149 106  88  79  76  62  94  57
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  70  93 111 152 132 156 136 115  44
+##         7   0   0   0   0   0   0   0   0   0
+##         8  39  47  51  77  80 201 200 337 247
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3033083
+error = 1 - accuracy
+error
+## [1] 0.6966917
+# This is the error of the model on the test data. As you can see,
+# this default tree has quite a bit of error.
+
+#Part g: Describe the profile/characterics of households in your training data that are
+# likely to have high income.
+# Based on the training data, high income is indicated based on:
+# 1) Home Ownership
+# 2) Professional/Managerial Occupation 
+# 3) Married or Living Together (Not Married)
+# 4) Having a Dual Income
+# 5) Graduated College or Graduate School
+
+
+#Part h: Import incomebig, run tree, compare to Part c tree
+library(readxl)
+incomebig <- read_excel("income.big.xlsx", col_names = F)
+incomebig_headings <- c('annualinc',
+                        'sex',
+                        'married',
+                        'age',
+                        'education',
+                        'occupation',
+                        'resident',
+                        'dualinc',
+                        'persontot',
+                        'person18',
+                        'homestat',
+                        'hometype',
+                        'ethnic',
+                        'lang',
+                        'X__15', 'X__16', 'X__17', 'X__18', 'X__19',
+                        'X__20', 'X__21', 'X__22', 'X__23', 'X__24')
+colnames(incomebig) <- incomebig_headings
+
+# Replace character NAs with R NAs, then count resulting NAs
+incomebig[incomebig == "NA"] <- NA
+sum(is.na(incomebig))
+## [1] 1937
+# All variables are categorical as defined in income.info file
+# For distribution investigation, I'm leaving annualinc as numeric and factoring all others
+incomebig[,names(incomebig)] <- lapply(incomebig, as.factor)
+incomebig$annualinc <- as.numeric(incomebig$annualinc)
+
+# Two way ANOVA tests given quantitative dependent variable and many categorical dependent variables
+twowayaov.inc <- aov(annualinc~., data = incomebig)
+summary(twowayaov.inc)
+##               Df Sum Sq Mean Sq F value   Pr(>F)    
+## sex            1    101   101.4  25.419 4.78e-07 ***
+## married        4   9616  2404.0 602.698  < 2e-16 ***
+## age            6   4076   679.3 170.304  < 2e-16 ***
+## education      5   1671   334.3  83.811  < 2e-16 ***
+## occupation     8   1387   173.4  43.482  < 2e-16 ***
+## resident       4    147    36.7   9.200 2.11e-07 ***
+## dualinc        2     33    16.3   4.085  0.01688 *  
+## persontot      8    262    32.8   8.214 4.18e-11 ***
+## person18       9     90    10.0   2.509  0.00729 ** 
+## homestat       2   1184   592.0 148.413  < 2e-16 ***
+## hometype       4    245    61.3  15.376 1.68e-12 ***
+## ethnic         7    127    18.1   4.547 4.53e-05 ***
+## lang           2     12     5.8   1.453  0.23397    
+## X__15          8     41     5.1   1.290  0.24343    
+## X__16          8     14     1.8   0.445  0.89419    
+## X__17          8     48     5.9   1.489  0.15535    
+## X__18          8     24     3.0   0.750  0.64698    
+## X__19          8     29     3.6   0.903  0.51285    
+## X__20          8     14     1.7   0.436  0.89991    
+## X__21          8     31     3.8   0.959  0.46666    
+## X__22          8     22     2.7   0.687  0.70333    
+## X__23          8     11     1.4   0.339  0.95091    
+## X__24          8     23     2.9   0.733  0.66252    
+## Residuals   4869  19421     4.0                     
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 1496 observations deleted due to missingness
+# Based on ANOVA, variables lang and X__15 to X__24 are unlikely to be predictive
+
+# Part h cont, Create tree with rpart using whole set and compare to Part c tree
+incomebig$annualinc <- as.factor(incomebig$annualinc)
+library(rpart)
+train_rpart_big <- rpart(annualinc~., data = incomebig)
+train_rpart_big
+## n= 6508 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 6508 5238 1 (0.2 0.087 0.078 0.09 0.079 0.12 0.11 0.15 0.094)  
+##    2) occupation=6,9 1312  501 1 (0.62 0.072 0.045 0.034 0.029 0.043 0.046 0.058 0.055) *
+##    3) occupation=1,2,3,4,5,7,8 5196 4322 8 (0.088 0.09 0.087 0.1 0.091 0.15 0.12 0.17 0.1)  
+##      6) homestat=2,3 2850 2453 1 (0.14 0.13 0.12 0.13 0.11 0.14 0.097 0.091 0.036)  
+##       12) age=1,2,6,7 1182  904 1 (0.24 0.2 0.15 0.11 0.074 0.077 0.058 0.066 0.033) *
+##       13) age=3,4,5 1668 1362 6 (0.071 0.09 0.1 0.14 0.14 0.18 0.12 0.11 0.038) *
+##      7) homestat=1 2346 1731 8 (0.026 0.037 0.043 0.072 0.067 0.15 0.15 0.26 0.19) *
+#install.packages("rpart.plot")
+library(rpart.plot) 
+rpart.plot(train_rpart_big, main = "IncomeBig Rpart Tree - Part h")
+ 
+# Part h cont: Number of inner nodes and terminal nodes. Need a function as.party from partykit.
+#install.packages("partykit")
+library(partykit)
+#Output below contains number of leaves and the size (n) and error (err) for each.
+as.party(train_rpart)
+## 
+## Model formula:
+## annualinc ~ sex + married + age + education + occupation + resident + 
+##     dualinc + persontot + person18 + homestat + hometype + ethnic + 
+##     lang
+## 
+## Fitted party:
+## [1] root
+## |   [2] occupation in 6, 9: 1 (n = 1106, err = 36.8%)
+## |   [3] occupation in 1, 2, 3, 4, 5, 7, 8
+## |   |   [4] homestat in 2, 3
+## |   |   |   [5] age in 1, 2, 7: 1 (n = 874, err = 77.2%)
+## |   |   |   [6] age in 3, 4, 5, 6: 6 (n = 1495, err = 80.7%)
+## |   |   [7] homestat in 1: 8 (n = 1921, err = 74.3%)
+## 
+## Number of inner nodes:    3
+## Number of terminal nodes: 4
+# The default decision tree for entire incomebig set still split on occupation with the
+# next level down split on homestat - the same as for the Part b tree.
+# The thresholds of each split are also the same for both trees.
+
+## Part i: Obtain 8 separate sets of training data from income, ensuring all are the same size
+## training data: 60% = 5396
+## testing data: 40% = 3597
+
+trainsize <- round(.6*nrow(income))
+
+# Train Sample 1
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData1 = income[train.indices, ]
+testData1 = income[test.indices,]
+
+# Train Sample 2
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData2 = income[train.indices, ]
+testData2 = income[test.indices,]
+
+# Train Sample 3
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData3 = income[train.indices, ]
+testData3 = income[test.indices,]
+
+# Train Sample 4
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData4 = income[train.indices, ]
+testData4 = income[test.indices,]
+
+# Train Sample 5
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData5 = income[train.indices, ]
+testData5 = income[test.indices,]
+
+# Train Sample 6
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData6 = income[train.indices, ]
+testData6 = income[test.indices,]
+
+# Train Sample 7
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData7 = income[train.indices, ]
+testData7 = income[test.indices,]
+
+# Train Sample 8
+train.indices <- sample(1:nrow(income), trainsize , replace = FALSE)
+test.indices <- setdiff(1:nrow(income), train.indices)
+
+trainData8 = income[train.indices, ]
+testData8 = income[test.indices,]
+
+# Part i cont, run rpart trees on Samples 1-8
+
+train_rpart1 <- rpart(annualinc~., data = trainData1)
+train_rpart2 <- rpart(annualinc~., data = trainData2)
+train_rpart3 <- rpart(annualinc~., data = trainData3)
+train_rpart4 <- rpart(annualinc~., data = trainData4)
+train_rpart5 <- rpart(annualinc~., data = trainData5)
+train_rpart6 <- rpart(annualinc~., data = trainData6)
+train_rpart7 <- rpart(annualinc~., data = trainData7)
+train_rpart8 <- rpart(annualinc~., data = trainData8)
+
+# Plot trees for Samples 1-8
+rpart.plot(train_rpart1, main = "Income Rpart Tree 1 - Part i")
+ 
+rpart.plot(train_rpart2, main = "Income Rpart Tree 2 - Part i")
+ 
+rpart.plot(train_rpart3, main = "Income Rpart Tree 3 - Part i")
+ 
+rpart.plot(train_rpart4, main = "Income Rpart Tree 4 - Part i")
+ 
+rpart.plot(train_rpart5, main = "Income Rpart Tree 5 - Part i")
+ 
+rpart.plot(train_rpart6, main = "Income Rpart Tree 6 - Part i")
+ 
+rpart.plot(train_rpart7, main = "Income Rpart Tree 7 - Part i")
+ 
+rpart.plot(train_rpart8, main = "Income Rpart Tree 8 - Part i")
+ 
+# 5 of 8 trees split on Occupation then Homestat
+# 3 of 8 trees split on Age then Homestat
+
+# Part j: Create two more C&R trees. Change the parameters of the tree to get:
+# 1) Large as possible (minimum-pruning)
+# 2) Prune with making sure you require 500 records in a parent nodes and
+#    100 records in leaf nodes
+# 3) Choose best value for cp based on cross-validation errors.
+# 4) How do the trees differ (explain briefly)
+# 5) Which seems more accurate on the training data?
+# 6) Which seems more accurate on the test data?
+
+# Part j2: Create max size tree using original trainData
+
+train_rpart_FullDepth <- rpart(annualinc~., data = trainData,
+                              control = rpart.control(minbucket = 1, cp = 0))
+#The Full Depth Tree is too big to output here, but would be displayed with next two lines:
+#rpart.plot(train_rpart_FullDepth, main = "Income Rpart Tree Max Size - Part j")
+#train_rpart_FullDepth
+
+# Part j3: Create Pruned Tree
+train_rpart_prune <- rpart(annualinc~., data = trainData,
+                               control = rpart.control(minsplit = 500, minbucket = 100))
+rpart.plot(train_rpart_prune, main = "Income Rpart Tree Prune - Part j")
+ 
+train_rpart_prune
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##    2) occupation=6,9 1106  407 1 (0.63 0.08 0.044 0.037 0.024 0.042 0.041 0.052 0.047) *
+##    3) occupation=1,2,3,4,5,7,8 4290 3586 8 (0.079 0.093 0.082 0.11 0.094 0.15 0.12 0.16 0.11)  
+##      6) homestat=2,3 2369 2016 6 (0.12 0.14 0.12 0.13 0.12 0.15 0.097 0.089 0.037)  
+##       12) age=1,2,7 874  675 1 (0.23 0.22 0.16 0.12 0.073 0.074 0.05 0.055 0.029) *
+##       13) age=3,4,5,6 1495 1207 6 (0.064 0.094 0.096 0.14 0.14 0.19 0.12 0.11 0.041) *
+##      7) homestat=1 1921 1427 8 (0.023 0.035 0.036 0.075 0.067 0.14 0.15 0.26 0.21) *
+# Determine optimal cp
+optimal_cp <- train_rpart_prune$cptable[as.numeric(which.min(train_rpart_prune$cptable[ ,"xerror"])),1]
+optimal_cp
+## [1] 0.01
+train_rpart_prune_cp <- prune(train_rpart_prune, cp = optimal_cp)
+train_rpart_prune
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##    2) occupation=6,9 1106  407 1 (0.63 0.08 0.044 0.037 0.024 0.042 0.041 0.052 0.047) *
+##    3) occupation=1,2,3,4,5,7,8 4290 3586 8 (0.079 0.093 0.082 0.11 0.094 0.15 0.12 0.16 0.11)  
+##      6) homestat=2,3 2369 2016 6 (0.12 0.14 0.12 0.13 0.12 0.15 0.097 0.089 0.037)  
+##       12) age=1,2,7 874  675 1 (0.23 0.22 0.16 0.12 0.073 0.074 0.05 0.055 0.029) *
+##       13) age=3,4,5,6 1495 1207 6 (0.064 0.094 0.096 0.14 0.14 0.19 0.12 0.11 0.041) *
+##      7) homestat=1 1921 1427 8 (0.023 0.035 0.036 0.075 0.067 0.14 0.15 0.26 0.21) *
+train_rpart_prune_cp
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##    2) occupation=6,9 1106  407 1 (0.63 0.08 0.044 0.037 0.024 0.042 0.041 0.052 0.047) *
+##    3) occupation=1,2,3,4,5,7,8 4290 3586 8 (0.079 0.093 0.082 0.11 0.094 0.15 0.12 0.16 0.11)  
+##      6) homestat=2,3 2369 2016 6 (0.12 0.14 0.12 0.13 0.12 0.15 0.097 0.089 0.037)  
+##       12) age=1,2,7 874  675 1 (0.23 0.22 0.16 0.12 0.073 0.074 0.05 0.055 0.029) *
+##       13) age=3,4,5,6 1495 1207 6 (0.064 0.094 0.096 0.14 0.14 0.19 0.12 0.11 0.041) *
+##      7) homestat=1 1921 1427 8 (0.023 0.035 0.036 0.075 0.067 0.14 0.15 0.26 0.21) *
+rpart.plot(train_rpart_prune_cp, main = "Income Rpart Tree Prune w/ Optimal CP - Part j")
+ 
+# Part j4: Compare the Full and Pruned tree
+# The FullDepth tree contains many 1000s of nodes vs the Pruned tree (using optimal cp)
+# which has only 7 nodes with 4 terminal nodes.
+
+# Part j5: Which is more accurate on training data?
+#Check predictions on trainData - FullDepth
+predict.matrix.rpart <- table(predict(train_rpart_FullDepth, type = "class"), trainData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 991  26  14   7  13  12   9  15  14
+##         2  13 422  20  18  12  17  14  10  11
+##         3  11  11 335  17  13  16   8  10   4
+##         4   5   8   7 407  23  15  20  10  10
+##         5   4   5   6  10 328  17  18  11  10
+##         6   6   8   9  11  13 557  31  40  27
+##         7   3   1   2   5   9  15 428  23  17
+##         8   4   5   4  17  16  18  28 615  54
+##         9   1   0   2   4   4  10  15  28 389
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.828762
+# Check predictions on testData
+predict.matrix.rpart <- table(predict(train_rpart_FullDepth, newdata = testData, type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 438  60  43  38  35  40  24  46  21
+##         2  74  45  47  38  25  32  25  26   9
+##         3  41  33  33  48  24  33  19  19  14
+##         4  45  43  43  38  40  61  43  41  14
+##         5  17  25  31  31  41  34  28  19  11
+##         6  31  34  33  58  58  92  80  80  36
+##         7  22  13  21  24  26  42  68  89  44
+##         8  23  23  13  32  28  73  70 139  93
+##         9  16  13   4  10  14  26  41  87 106
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.2780095
+#Check predictions on trainData - Pruned
+predict.matrix.rpart <- table(predict(train_rpart_prune_cp, type = "class"), trainData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 898 277 186 145  91 111  89 106  77
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  95 141 144 206 212 288 185 162  62
+##         7   0   0   0   0   0   0   0   0   0
+##         8  45  68  69 145 128 278 297 494 397
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3113417
+# Check predictions on testData
+predict.matrix.rpart <- table(predict(train_rpart_prune_cp, newdata = testData, type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 598 149 106  88  79  76  62  94  57
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  70  93 111 152 132 156 136 115  44
+##         7   0   0   0   0   0   0   0   0   0
+##         8  39  47  51  77  80 201 200 337 247
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3033083
+# As expected, the Full Depth tree was extremely accurate on the train data, but worse on the test data,
+# while the Pruned tree was consistently accurate between training and test data at about 30%.
+
+
+
+#Part k. i decision tree with 50 training and 50 test
+index = sample(2, nrow(income), replace = TRUE, prob = c(0.5,0.5))
+
+TrainData11 = income[index == 1, ]
+dim(TrainData11)
+## [1] 4492   14
+TestData11 = income[index == 2,]
+dim(TestData11)
+## [1] 4501   14
+inc_rpart = rpart(annualinc~., data = TrainData11,method = "class")
+inc_rpart
+## n= 4492 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 4492 3611 1 (0.2 0.084 0.077 0.085 0.083 0.12 0.11 0.15 0.099)  
+##    2) occupation=6,9 921  334 1 (0.64 0.088 0.039 0.028 0.027 0.04 0.042 0.05 0.048) *
+##    3) occupation=1,2,3,4,5,7,8 3571 2959 8 (0.082 0.083 0.087 0.1 0.098 0.14 0.13 0.17 0.11)  
+##      6) homestat=2,3 1946 1672 6 (0.13 0.12 0.13 0.12 0.12 0.14 0.1 0.096 0.036)  
+##       12) age=1,2,6,7 765  589 1 (0.23 0.2 0.14 0.094 0.095 0.082 0.056 0.075 0.031) *
+##       13) age=3,4,5 1181  970 6 (0.058 0.076 0.12 0.14 0.14 0.18 0.14 0.11 0.04) *
+##      7) homestat=1 1625 1200 8 (0.031 0.033 0.039 0.071 0.068 0.14 0.16 0.26 0.2) *
+rpart.plot(inc_rpart, main = "Income Rpart Tree 50/50 Train/Test - Part k")
+ 
+plotcp(inc_rpart)
+ 
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TrainData11$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3114426
+#Accuracy for 50/50 split on training data is above
+inc_rpart = rpart(annualinc~., data = TestData11,method = "class")
+inc_rpart
+## n= 4501 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 4501 3637 1 (0.19 0.089 0.072 0.096 0.077 0.13 0.1 0.14 0.098)  
+##    2) age=1 432   53 1 (0.88 0.023 0.014 0.016 0.0069 0.012 0.012 0.021 0.019) *
+##    3) age=2,3,4,5,6,7 4069 3428 8 (0.12 0.096 0.078 0.1 0.085 0.14 0.11 0.16 0.11)  
+##      6) homestat=2,3 2432 1991 1 (0.18 0.13 0.11 0.13 0.1 0.13 0.09 0.092 0.045)  
+##       12) occupation=6,9 489  278 1 (0.43 0.11 0.074 0.055 0.043 0.059 0.063 0.092 0.074) *
+##       13) occupation=1,2,3,4,5,7,8 1943 1659 4 (0.12 0.14 0.11 0.15 0.11 0.14 0.096 0.092 0.038)  
+##         26) age=2,6,7 743  593 1 (0.2 0.2 0.16 0.15 0.079 0.083 0.054 0.048 0.026) *
+##         27) age=3,4,5 1200  982 6 (0.067 0.1 0.085 0.15 0.14 0.18 0.12 0.12 0.045) *
+##      7) homestat=1 1637 1219 8 (0.027 0.041 0.037 0.068 0.062 0.16 0.15 0.26 0.2) *
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TestData11$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3057098
+#Accuracy for 50/50 split on test data is above
+
+#ii 70 30
+index = sample(2, nrow(income), replace = TRUE, prob = c(0.7,0.3))
+TrainData12 = income[index == 1, ]
+TestData12 = income[index == 2,]
+dim(TrainData12)
+## [1] 6302   14
+dim(TestData12)
+## [1] 2691   14
+inc_rpart = rpart(annualinc~., data = TrainData12,method = "class")
+inc_rpart
+## n= 6302 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 6302 5087 1 (0.19 0.088 0.076 0.089 0.08 0.13 0.1 0.15 0.095)  
+##    2) occupation=6,9 1271  468 1 (0.63 0.08 0.041 0.031 0.027 0.043 0.036 0.064 0.046) *
+##    3) occupation=1,2,3,4,5,7,8 5031 4179 8 (0.082 0.09 0.085 0.1 0.093 0.15 0.12 0.17 0.11)  
+##      6) homestat=2,3 2751 2362 6 (0.13 0.13 0.12 0.13 0.12 0.14 0.096 0.092 0.035)  
+##       12) age=1,2,6,7 1100  850 1 (0.23 0.2 0.15 0.11 0.085 0.081 0.051 0.057 0.033) *
+##       13) age=3,4,5 1651 1351 6 (0.061 0.088 0.11 0.15 0.14 0.18 0.13 0.11 0.037) *
+##      7) homestat=1 2280 1680 8 (0.027 0.036 0.038 0.071 0.064 0.15 0.15 0.26 0.19) *
+rpart.plot(inc_rpart,  main = "Income Rpart Tree 70/30 Train/Test - Part k")
+ 
+plotcp(inc_rpart)
+ 
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TrainData12$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3099016
+#Accuracy for 70/30 split on training data is above
+inc_rpart = rpart(annualinc~., data = TestData12,method = "class")
+inc_rpart
+## n= 2691 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 2691 2161 1 (0.2 0.082 0.069 0.093 0.082 0.12 0.12 0.14 0.11)  
+##    2) age=1 266   34 1 (0.87 0.026 0.019 0.023 0.0038 0.015 0.019 0.015 0.0075) *
+##    3) age=2,3,4,5,6,7 2425 2054 8 (0.12 0.088 0.075 0.1 0.09 0.13 0.13 0.15 0.12)  
+##      6) homestat=2,3 1474 1207 1 (0.18 0.12 0.098 0.12 0.11 0.12 0.1 0.094 0.053)  
+##       12) occupation=6,9 309  178 1 (0.42 0.11 0.065 0.058 0.052 0.052 0.071 0.071 0.094) *
+##       13) occupation=1,2,3,4,5,7,8 1165 1000 6 (0.12 0.12 0.11 0.14 0.12 0.14 0.11 0.1 0.042)  
+##         26) occupation=2,3,4,5,7,8 752  627 1 (0.17 0.16 0.12 0.15 0.11 0.12 0.08 0.07 0.019)  
+##           52) age=2,7 318  240 1 (0.25 0.2 0.14 0.12 0.072 0.075 0.041 0.085 0.016) *
+##           53) age=3,4,5,6 434  360 4 (0.11 0.13 0.11 0.17 0.14 0.15 0.11 0.06 0.021) *
+##         27) occupation=1 413  339 6 (0.027 0.053 0.082 0.12 0.14 0.18 0.16 0.15 0.085) *
+##      7) homestat=1 951  718 8 (0.033 0.038 0.039 0.065 0.065 0.14 0.16 0.25 0.22) *
+predict.matrix.rpart <- table(predict(inc_rpart, type = "class"), TestData12$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3054627
+#Accuracy for 70/30 split on test data is above 
+
+# 80 20
+index = sample(2, nrow(income), replace = TRUE, prob = c(0.8,0.2))
+TrainData13 = income[index == 1, ]
+dim(TrainData13)
+## [1] 7247   14
+TestData13 = income[index == 2,]
+dim(TestData13)
+## [1] 1746   14
+inc_rpart = rpart(annualinc~., data = TrainData13,method = "class")
+inc_rpart
+## n= 7247 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 7247 5841 1 (0.19 0.087 0.076 0.09 0.078 0.12 0.11 0.14 0.1)  
+##    2) occupation=6,9 1517  560 1 (0.63 0.082 0.04 0.032 0.024 0.04 0.043 0.058 0.051) *
+##    3) occupation=1,2,3,4,5,7,8 5730 4771 8 (0.078 0.088 0.085 0.1 0.092 0.14 0.12 0.17 0.11)  
+##      6) homestat=2,3 3144 2697 6 (0.12 0.13 0.12 0.13 0.12 0.14 0.099 0.094 0.04)  
+##       12) age=1,2,6,7 1253  979 1 (0.22 0.2 0.15 0.11 0.085 0.085 0.057 0.065 0.031) *
+##       13) age=3,4,5 1891 1550 6 (0.059 0.088 0.11 0.14 0.14 0.18 0.13 0.11 0.046) *
+##      7) homestat=1 2586 1921 8 (0.024 0.036 0.039 0.072 0.064 0.15 0.16 0.26 0.2) *
+rpart.plot(inc_rpart,  main = "Income Rpart Tree 80/20 Train/Test - Part k")
+ 
+plotcp(inc_rpart)
+ 
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TrainData13$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3086795
+#Accuracy for 80/20 split on training data is above
+inc_rpart = rpart(annualinc~., data = TestData13,method = "class")
+inc_rpart
+## n= 1746 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 1746 1407 1 (0.19 0.082 0.068 0.094 0.09 0.13 0.11 0.15 0.086)  
+##    2) age=1 163   25 1 (0.85 0.031 0.012 0.012 0 0.018 0.018 0.037 0.025) *
+##    3) age=2,3,4,5,6,7 1583 1328 8 (0.13 0.088 0.074 0.1 0.099 0.14 0.12 0.16 0.093)  
+##      6) homestat=2,3 944  770 1 (0.18 0.12 0.1 0.13 0.12 0.13 0.096 0.091 0.033)  
+##       12) age=2,6,7 413  291 1 (0.3 0.16 0.12 0.12 0.08 0.07 0.048 0.065 0.039) *
+##       13) age=3,4,5 531  442 6 (0.098 0.094 0.081 0.14 0.15 0.17 0.13 0.11 0.028) *
+##      7) homestat=1 639  470 8 (0.042 0.034 0.036 0.061 0.074 0.16 0.15 0.26 0.18) *
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TestData13$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.2966781
+#Accuracy for 80/20 split on test data is above
+
+#d 90-10
+
+index = sample(2, nrow(income), replace = TRUE, prob = c(0.9,0.1))
+
+TrainData14 = income[index == 1, ]
+dim(TrainData14)
+## [1] 8090   14
+TestData14 = income[index == 2,]
+dim(TestData14)
+## [1] 903  14
+inc_rpart = rpart(annualinc~., data = TrainData14,method = "class")
+inc_rpart
+## n= 8090 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 8090 6507 1 (0.2 0.086 0.074 0.09 0.081 0.12 0.11 0.14 0.097)  
+##    2) occupation=6,9 1677  617 1 (0.63 0.075 0.042 0.033 0.028 0.04 0.042 0.058 0.05) *
+##    3) occupation=1,2,3,4,5,7,8 6413 5338 8 (0.082 0.089 0.082 0.11 0.094 0.15 0.12 0.17 0.11)  
+##      6) homestat=2,3 3546 3049 6 (0.13 0.13 0.12 0.13 0.12 0.14 0.1 0.095 0.037)  
+##       12) age=1,2,6,7 1418 1093 1 (0.23 0.19 0.14 0.12 0.087 0.082 0.054 0.063 0.028) *
+##       13) age=3,4,5 2128 1747 6 (0.058 0.091 0.1 0.14 0.14 0.18 0.13 0.12 0.043) *
+##      7) homestat=1 2867 2128 8 (0.026 0.037 0.037 0.069 0.066 0.15 0.16 0.26 0.2) *
+rpart.plot(inc_rpart, main = "Income Rpart Tree 90/10 Train/Test - Part k")
+ 
+
+plotcp(inc_rpart)
+ 
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TrainData14$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3096415
+#Accuracy for 90/10 split on training data is above
+inc_rpart = rpart(annualinc~., data = TestData14,method = "class")
+inc_rpart
+## n= 903 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 903 741 1 (0.18 0.085 0.08 0.091 0.076 0.12 0.11 0.15 0.11)  
+##    2) age=1 76   8 1 (0.89 0 0.039 0 0 0.053 0 0.013 0) *
+##    3) age=2,3,4,5,6,7 827 692 8 (0.11 0.093 0.083 0.099 0.083 0.13 0.12 0.16 0.12)  
+##      6) homestat=2,3 481 399 1 (0.17 0.14 0.11 0.12 0.098 0.13 0.1 0.085 0.046)  
+##       12) occupation=2,6,8,9 147 100 1 (0.32 0.18 0.082 0.075 0.034 0.075 0.088 0.088 0.061) *
+##       13) occupation=1,3,4,5,7 334 284 6 (0.1 0.12 0.12 0.15 0.13 0.15 0.11 0.084 0.039)  
+##         26) age=2,6,7 100  74 2 (0.12 0.26 0.18 0.16 0.07 0.05 0.07 0.04 0.05) *
+##         27) age=3,4,5 234 189 6 (0.098 0.06 0.098 0.14 0.15 0.19 0.12 0.1 0.034) *
+##      7) homestat=1 346 252 8 (0.035 0.032 0.046 0.064 0.064 0.13 0.15 0.27 0.21)  
+##       14) occupation=2,3,4,5,7,8,9 191 142 8 (0.058 0.031 0.079 0.073 0.063 0.17 0.16 0.26 0.12) *
+##       15) occupation=1,6 155 103 9 (0.0065 0.032 0.0065 0.052 0.065 0.077 0.14 0.29 0.34)  
+##         30) persontot=1,5,6,9 28  16 8 (0 0.036 0 0.11 0.036 0.21 0.11 0.43 0.071) *
+##         31) persontot=2,3,4,7,8 127  77 9 (0.0079 0.031 0.0079 0.039 0.071 0.047 0.14 0.26 0.39) *
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), TestData14$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3289037
+#Accuracy for 90/10 split on test data is above
+
+#As we can see that 90-10 gives us the highest accuracy but we may have overfit our model
+#we have tested with default parameters and 80-20 gives us a better predition
+
+#PART L :  Information index
+
+inc_rpart = rpart(annualinc~., data = trainData,method = "class", parms = list(split='information'))
+inc_rpart
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+## 1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##   2) age=1,2 1797  976 1 (0.46 0.13 0.088 0.071 0.043 0.058 0.047 0.053 0.048) *
+##   3) age=3,4,5,6,7 3599 2933 8 (0.06 0.068 0.067 0.1 0.098 0.16 0.14 0.19 0.13)  
+##     6) homestat=2,3 1721 1417 6 (0.1 0.11 0.1 0.13 0.13 0.18 0.11 0.099 0.037) *
+##     7) homestat=1 1878 1382 8 (0.022 0.032 0.036 0.073 0.065 0.14 0.16 0.26 0.21) *
+rpart.plot(inc_rpart, main = "Income Rpart Tree (Information) - Part l")
+ 
+plotcp(inc_rpart)
+ 
+predict.matrix.rpart <- table(predict(inc_rpart, type = "class"), trainData$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3004077
+#Accuracy for original training data using default information tree is above
+inc_rpart = rpart(annualinc~., data = testData, method = "class", parms = list(split='information'))
+inc_rpart
+## n= 3597 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 3597 2890 1 (0.2 0.08 0.075 0.088 0.081 0.12 0.11 0.15 0.097)  
+##    2) occupation=6,9 737  277 1 (0.62 0.072 0.038 0.027 0.033 0.039 0.045 0.065 0.057) *
+##    3) occupation=1,2,3,4,5,7,8 2860 2362 8 (0.086 0.083 0.084 0.1 0.093 0.14 0.13 0.17 0.11)  
+##      6) homestat=2,3 1581 1361 4 (0.13 0.12 0.12 0.14 0.12 0.13 0.1 0.1 0.037)  
+##       12) occupation=2,3,4,5,7,8 1034  841 1 (0.19 0.15 0.14 0.14 0.12 0.11 0.074 0.071 0.022)  
+##         24) age=1,2,6 449  319 1 (0.29 0.18 0.14 0.089 0.087 0.078 0.031 0.078 0.027) *
+##         25) age=3,4,5,7 585  483 4 (0.11 0.12 0.13 0.17 0.14 0.13 0.11 0.065 0.019) *
+##       13) occupation=1 547  455 6 (0.027 0.064 0.088 0.14 0.12 0.17 0.16 0.16 0.066) *
+##      7) homestat=1 1279  942 8 (0.03 0.037 0.04 0.06 0.063 0.16 0.16 0.26 0.19) *
+predict.matrix.rpart <- table(predict(inc_rpart,type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3116486
+#Accuracy for original test data using default information tree is above
+#l Tree with Gini index is the same as what we created in Part b
+train_rpart <- rpart(annualinc~., data = trainData)
+train_rpart
+## n= 5396 
+## 
+## node), split, n, loss, yval, (yprob)
+##       * denotes terminal node
+## 
+##  1) root 5396 4358 1 (0.19 0.09 0.074 0.092 0.08 0.13 0.11 0.14 0.099)  
+##    2) occupation=6,9 1106  407 1 (0.63 0.08 0.044 0.037 0.024 0.042 0.041 0.052 0.047) *
+##    3) occupation=1,2,3,4,5,7,8 4290 3586 8 (0.079 0.093 0.082 0.11 0.094 0.15 0.12 0.16 0.11)  
+##      6) homestat=2,3 2369 2016 6 (0.12 0.14 0.12 0.13 0.12 0.15 0.097 0.089 0.037)  
+##       12) age=1,2,7 874  675 1 (0.23 0.22 0.16 0.12 0.073 0.074 0.05 0.055 0.029) *
+##       13) age=3,4,5,6 1495 1207 6 (0.064 0.094 0.096 0.14 0.14 0.19 0.12 0.11 0.041) *
+##      7) homestat=1 1921 1427 8 (0.023 0.035 0.036 0.075 0.067 0.14 0.15 0.26 0.21) *
+library(rpart.plot) 
+rpart.plot(train_rpart, main = "Income Rpart Tree - Part b")
+
+ 
+
+#Check predictions on trainData
+predict.matrix.rpart <- table(predict(train_rpart, type = "class"), trainData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 898 277 186 145  91 111  89 106  77
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  95 141 144 206 212 288 185 162  62
+##         7   0   0   0   0   0   0   0   0   0
+##         8  45  68  69 145 128 278 297 494 397
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3113417
+# Check predictions on testData
+predict.matrix.rpart <- table(predict(train_rpart, newdata = testData, type = "class"), testData$annualinc, dnn = c("Predicted", "Actual"))
+predict.matrix.rpart
+##          Actual
+## Predicted   1   2   3   4   5   6   7   8   9
+##         1 598 149 106  88  79  76  62  94  57
+##         2   0   0   0   0   0   0   0   0   0
+##         3   0   0   0   0   0   0   0   0   0
+##         4   0   0   0   0   0   0   0   0   0
+##         5   0   0   0   0   0   0   0   0   0
+##         6  70  93 111 152 132 156 136 115  44
+##         7   0   0   0   0   0   0   0   0   0
+##         8  39  47  51  77  80 201 200 337 247
+##         9   0   0   0   0   0   0   0   0   0
+accuracy<-sum(diag(predict.matrix.rpart))/sum(predict.matrix.rpart)
+accuracy
+## [1] 0.3033083
+
+# Both Info and Gini had similar results of about 30-31% on training and test data. 
+# Improve - It just shows how much the purity measure (in classification tree)
+# has been improved in each subset compared to the parent node
+
+ 
+Question 2:
+The file "letters ABPR.csv" contains 3116 observations, each of which corresponds to a certain image of one of the four letters A, B, P and R. The images came from 20 different fonts, which were then randomly distorted to produce the final images; each such distorted image is represented as a collection of pixels, each of which is "on" or "off". For each such distorted image, we have available certain statistics of the image in terms of these pixels, as well as which of the four letters the image is. This data comes from the UCI Machine Learning Repository
+Solution:
+Stage 1: Loading the input data and creating training-test dataset
+library(rpart)
+library(readr)
+library(rpart.plot)
+## Warning: package 'rpart.plot' was built under R version 3.4.2
+letters_ABPR <- read_csv("C:/Users/Prafful/Downloads/letters_ABPR.csv")
+## Parsed with column specification:
+## cols(
+##   letter = col_character(),
+##   xbox = col_integer(),
+##   ybox = col_integer(),
+##   width = col_integer(),
+##   height = col_integer(),
+##   onpix = col_integer(),
+##   xbar = col_integer(),
+##   ybar = col_integer(),
+##   x2bar = col_integer(),
+##   y2bar = col_integer(),
+##   xybar = col_integer(),
+##   x2ybar = col_integer(),
+##   xy2bar = col_integer(),
+##   xedge = col_integer(),
+##   xedgeycor = col_integer(),
+##   yedge = col_integer(),
+##   yedgexcor = col_integer()
+## )
+set.seed(999)
+letters_ABPR$letter = as.factor(letters_ABPR$letter)
+
+sampling = sample((seq_len(nrow(letters_ABPR))), size = floor(0.7 * nrow(letters_ABPR)))
+letters_train = letters_ABPR[sampling,]
+letters_test =  letters_ABPR[-sampling,]
+
+
+
+str(letters_ABPR)
+## Classes 'tbl_df', 'tbl' and 'data.frame':    3116 obs. of  17 variables:
+##  $ letter   : Factor w/ 4 levels "A","B","P","R": 2 1 4 2 3 4 4 1 3 3 ...
+##  $ xbox     : int  4 1 5 5 3 8 2 3 8 6 ...
+##  $ ybox     : int  2 1 9 9 6 10 6 7 14 10 ...
+##  $ width    : int  5 3 5 7 4 8 4 5 7 8 ...
+##  $ height   : int  4 2 7 7 4 6 4 5 8 8 ...
+##  $ onpix    : int  4 1 6 10 2 6 3 3 4 7 ...
+##  $ xbar     : int  8 8 6 9 4 7 6 12 5 8 ...
+##  $ ybar     : int  7 2 11 8 14 7 7 2 10 5 ...
+##  $ x2bar    : int  6 2 7 4 8 3 5 3 6 7 ...
+##  $ y2bar    : int  6 2 3 4 1 5 5 2 3 5 ...
+##  $ xybar    : int  7 8 7 6 11 8 6 10 12 7 ...
+##  $ x2ybar   : int  6 2 3 8 6 4 5 2 5 6 ...
+##  $ xy2bar   : int  6 8 9 6 3 8 7 9 4 6 ...
+##  $ xedge    : int  2 1 2 6 0 6 3 2 4 3 ...
+##  $ xedgeycor: int  8 6 7 11 10 6 7 6 10 9 ...
+##  $ yedge    : int  7 2 5 8 4 7 5 3 4 8 ...
+##  $ yedgexcor: int  10 7 11 7 8 7 8 8 8 9 ...
+##  - attr(*, "spec")=List of 2
+##   ..$ cols   :List of 17
+##   .. ..$ letter   : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_character" "collector"
+##   .. ..$ xbox     : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ ybox     : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ width    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ height   : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ onpix    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ xbar     : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ ybar     : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ x2bar    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ y2bar    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ xybar    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ x2ybar   : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ xy2bar   : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ xedge    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ xedgeycor: list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ yedge    : list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   .. ..$ yedgexcor: list()
+##   .. .. ..- attr(*, "class")= chr  "collector_integer" "collector"
+##   ..$ default: list()
+##   .. ..- attr(*, "class")= chr  "collector_guess" "collector"
+##   ..- attr(*, "class")= chr "col_spec"
+summary(letters_ABPR)
+##  letter       xbox             ybox            width       
+##  A:789   Min.   : 0.000   Min.   : 0.000   Min.   : 1.000  
+##  B:766   1st Qu.: 3.000   1st Qu.: 5.000   1st Qu.: 4.000  
+##  P:803   Median : 4.000   Median : 7.000   Median : 5.000  
+##  R:758   Mean   : 3.915   Mean   : 7.051   Mean   : 5.186  
+##          3rd Qu.: 5.000   3rd Qu.: 9.000   3rd Qu.: 6.000  
+##          Max.   :13.000   Max.   :15.000   Max.   :11.000  
+##      height           onpix             xbar             ybar       
+##  Min.   : 0.000   Min.   : 0.000   Min.   : 3.000   Min.   : 0.000  
+##  1st Qu.: 4.000   1st Qu.: 2.000   1st Qu.: 6.000   1st Qu.: 6.000  
+##  Median : 6.000   Median : 4.000   Median : 7.000   Median : 7.000  
+##  Mean   : 5.276   Mean   : 3.869   Mean   : 7.469   Mean   : 7.197  
+##  3rd Qu.: 7.000   3rd Qu.: 5.000   3rd Qu.: 8.000   3rd Qu.: 9.000  
+##  Max.   :12.000   Max.   :12.000   Max.   :14.000   Max.   :15.000  
+##      x2bar            y2bar           xybar            x2ybar     
+##  Min.   : 0.000   Min.   :0.000   Min.   : 3.000   Min.   : 0.00  
+##  1st Qu.: 3.000   1st Qu.:2.000   1st Qu.: 7.000   1st Qu.: 3.00  
+##  Median : 4.000   Median :4.000   Median : 8.000   Median : 5.00  
+##  Mean   : 4.706   Mean   :3.903   Mean   : 8.491   Mean   : 4.52  
+##  3rd Qu.: 6.000   3rd Qu.:5.000   3rd Qu.:10.000   3rd Qu.: 6.00  
+##  Max.   :11.000   Max.   :8.000   Max.   :14.000   Max.   :10.00  
+##      xy2bar           xedge          xedgeycor          yedge     
+##  Min.   : 0.000   Min.   : 0.000   Min.   : 1.000   Min.   : 0.0  
+##  1st Qu.: 6.000   1st Qu.: 2.000   1st Qu.: 7.000   1st Qu.: 3.0  
+##  Median : 7.000   Median : 2.000   Median : 8.000   Median : 4.0  
+##  Mean   : 6.711   Mean   : 2.913   Mean   : 7.763   Mean   : 4.6  
+##  3rd Qu.: 8.000   3rd Qu.: 4.000   3rd Qu.: 9.000   3rd Qu.: 6.0  
+##  Max.   :14.000   Max.   :10.000   Max.   :13.000   Max.   :12.0  
+##    yedgexcor     
+##  Min.   : 1.000  
+##  1st Qu.: 7.000  
+##  Median : 8.000  
+##  Mean   : 8.418  
+##  3rd Qu.:10.000  
+##  Max.   :13.000
+Stage 2: Finding the accuracy of regression tree :
+rTree = rpart(letter~.-letter, data = letters_train, method = "class")
+rpart.plot(rTree)
+ 
+pred_rTree = predict(rTree, newdata = letters_test, type = "class")
+accuracy = table(letters_test$letter,pred_rTree)
+accuracy_tree = sum(diag(accuracy)/sum(accuracy))
+accuracy_tree
+## [1] 0.8670749
+Hence, accuracy for Regression tree is 86.7%
+Stage 3: Optimizing the parameters of regression trees:
+printcp(rTree)
+## 
+## Classification tree:
+## rpart(formula = letter ~ . - letter, data = letters_train, method = "class")
+## 
+## Variables actually used in tree construction:
+## [1] x2bar     x2ybar    xedgeycor xy2bar    xybar     ybar      yedge    
+## 
+## Root node error: 1601/2181 = 0.73407
+## 
+## n= 2181 
+## 
+##         CP nsplit rel error  xerror     xstd
+## 1 0.291693      0   1.00000 1.02311 0.012614
+## 2 0.189881      2   0.41661 0.41661 0.013440
+## 3 0.024360      3   0.22673 0.22673 0.010865
+## 4 0.014991      4   0.20237 0.20237 0.010374
+## 5 0.011243      5   0.18738 0.18801 0.010061
+## 6 0.010000      8   0.15365 0.17364 0.009728
+rTree_new_cp = rpart(letter~.-letter, data = letters_train, method = "class", cp=0.01, minsplit = 9)
+pred_rTree_new_cp = predict(rTree_new_cp, newdata = letters_test, type = "class")
+accuracy_new_cp = table(letters_test$letter,pred_rTree_new_cp)
+accuracy_tree_new_cp = sum(diag(accuracy_new_cp)/sum(accuracy_new_cp))
+accuracy_tree_new_cp
+## [1] 0.8840749
+Using printcp function, we can findout value of cp with minimum errors which is 0.010 and no. of minimum splits is 9. Hence, the accuracy of optimized regression tree is 88.4%
+Stage 4: Finding out the accuracy of Classification tree:
+library(party)
+## Loading required package: grid
+## Loading required package: mvtnorm
+## Loading required package: modeltools
+## Loading required package: stats4
+## Loading required package: strucchange
+## Loading required package: zoo
+## 
+## Attaching package: 'zoo'
+## The following objects are masked from 'package:base':
+## 
+##     as.Date, as.Date.numeric
+## Loading required package: sandwich
+ctree_letters = ctree(letter~.-letter, data = letters_train)
+summary(ctree_letters)
+##     Length      Class       Mode 
+##          1 BinaryTree         S4
+plot(ctree_letters)
+ 
+pred_ctree = predict(ctree_letters, newdata = letters_test)
+accuracy_ctree = table(pred_ctree, letters_test$letter) 
+accuracy_ctree1 =  sum(diag(accuracy_ctree)/sum(accuracy_ctree))
+accuracy_ctree1
+## [1] 1
+So, the accuracy of classification tree is 100%.
+Stage 5: Finding out the accuracy using Random forest:
+library(randomForest)
+## Warning: package 'randomForest' was built under R version 3.4.2
+## randomForest 4.6-12
+## Type rfNews() to see new features/changes/bug fixes.
+set.seed(1000)
+randomForest_letter = randomForest(letters_train$letter ~ .-letters_train$letter,data=letters_train)
+predictForest = predict(randomForest_letter,newdata=letters_test)
+
+accuracy_random_forest = table(letters_test$letter,predictForest)
+accuracy_random_forest1 = sum(diag(accuracy_random_forest)/sum(accuracy_random_forest))
+accuracy_random_forest1
+## [1] 0.9893048
+The accuracy of random forest is 98.9%.
+Hence, Regression tree and Random Forest has 88.4% and 98.9% accuracy while classification tree has 100%. Classification tree is better than other models.
